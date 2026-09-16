@@ -1,14 +1,3 @@
-"""
-graph_utils.py
-Builds a transaction graph from traced edges and renders it as an
-interactive HTML visualization using pyvis. Also produces an
-investigator-oriented summary (investigation_summary) - the structured
-"what did we find" readout, separate from the raw graph.
-
-Uses a MultiDiGraph so multiple transactions between the same two
-addresses are preserved individually, never collapsed.
-"""
-
 import networkx as nx
 from pyvis.network import Network
 from collections import defaultdict
@@ -29,10 +18,6 @@ def _display_value(edge):
 
 
 def build_graph(edges):
-    """
-    edges: list of dicts from tracer.trace_wallet()
-    Returns a NetworkX MultiDiGraph - one edge per real transaction.
-    """
     G = nx.MultiDiGraph()
     for e in edges:
         amount, token = _display_value(e)
@@ -48,10 +33,6 @@ def build_graph(edges):
 
 
 def aggregate_edges(G):
-    """
-    Collapses parallel edges between the same (src, dst) pair for display:
-    {(A, B): {"tx_count": 3, "totals": {"USDT": 7500.0, "ETH": 2.0}}}
-    """
     agg = defaultdict(lambda: {"tx_count": 0, "totals": defaultdict(float)})
     for src, dst, data in G.edges(data=True):
         entry = agg[(src, dst)]
@@ -61,10 +42,6 @@ def aggregate_edges(G):
 
 
 def investigation_table(G, tags):
-    """
-    Investigator-readable rows: Address, Entity, Entity Type/Subtype,
-    Hop, Transaction Count.
-    """
     rows = []
     for node in G.nodes:
         tag = tags.get(node)
@@ -82,13 +59,7 @@ def investigation_table(G, tags):
     return rows
 
 
-def investigation_summary(G, tags, edges, start_address, risk):
-    """
-    Produces the structured, investigator-facing readout: what was
-    observed, which entities were identified, and why the risk score
-    came out the way it did. This is the "report", separate from the
-    raw graph data.
-    """
+def investigation_summary(G, tags, edges, start_address, risk, cross_chain_findings=None):
     assets_observed = sorted({e["token"] for e in edges})
     max_hop = max([e["hop"] for e in edges], default=-1)
 
@@ -116,6 +87,7 @@ def investigation_summary(G, tags, edges, start_address, risk):
             "unidentified_wallets": unidentified_count,
         },
         "spoofed_tokens_detected": spoofed_tokens or "None detected",
+        "cross_chain_activity": list((cross_chain_findings or {}).keys()) or "None detected",
         "risk_indicators": risk["reasons"],
         "risk_level": risk["level"],
         "risk_score": risk["score"],
@@ -123,12 +95,7 @@ def investigation_summary(G, tags, edges, start_address, risk):
 
 
 def render_graph(G, tags=None, output_file="graph.html"):
-    """
-    Functional render (not styled yet). Nodes are colored by entity type
-    (VASP / bridge / mixer / contract / unidentified wallet). Parallel
-    edges between the same pair are aggregated into one visual line.
-    """
-    net = Network(directed=True, height="600px", width="100%", bgcolor="#1e1e1e", font_color="white")
+    net = Network(directed=True, height="600px", width="100%", bgcolor="#1e1e1e", font_color="white", cdn_resources="remote")
 
     for node in G.nodes:
         tag = tags.get(node) if tags else None

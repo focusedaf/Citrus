@@ -14,10 +14,16 @@ KNOWN_BRIDGES = {
     "0x933597a323eb81cae705c5bc29985172fd5a3973": ("liquidity_bridge", "Stargate USDT Pool"),
 }
 
-# Empty by default - populate with known mixer/tumbler contract addresses (e.g. Tornado Cash pools) to extend the mixer-detection roadmap item.
-KNOWN_MIXERS = {}
+# Real, verified Tornado Cash ETH pool contract addresses (Ethereum mainnet).
+KNOWN_MIXERS = {
+    "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc": ("tumbler", "Tornado Cash: 0.1 ETH"),
+    "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936": ("tumbler", "Tornado Cash: 1 ETH"),
+    "0x910cbd523d972eb0a6f4cae4618ad62622b39dbf": ("tumbler", "Tornado Cash: 10 ETH"),
+    "0xa160cdab225685da1d56aa342ad8841c3b53f291": ("tumbler", "Tornado Cash: 100 ETH"),
+    "0xd90e2f925da726b50c4ed8d0fb90ad053324f31b": ("tumbler", "Tornado Cash: Router"),
+}
 
-# Infrastructure contracts - NOT wallets and NOT VASPs. Tagging these separately stops them showing up as "Unidentified" in the investigation table, and stops the trace engine's callers from mistaking them for fund destinations (the trace engine itself already excludes them from hop-following via tracer.HOPPABLE_TYPES - this is purely for labeling).
+# Infrastructure contracts - NOT wallets and NOT VASPs.
 KNOWN_CONTRACTS = {
     "0xdac17f958d2ee523a2206206994597c13d831ec7": ("token_contract", "USDT Token Contract"),
     "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": ("token_contract", "USDC Token Contract"),

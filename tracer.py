@@ -1,10 +1,7 @@
 import requests
+import time
+from config import BASE_URL, SUPPORTED_CHAINS
 
-BASE_URL = "https://api.etherscan.io/v2/api"
-
-# Real, verified contract addresses for widely-impersonated tokens.
-# If a transfer claims one of these symbols but comes from a DIFFERENT
-# contract address, it's not the real token - it's a lookalike/scam token.
 KNOWN_REAL_TOKEN_CONTRACTS = {
     "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7",
     "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -14,35 +11,36 @@ KNOWN_REAL_TOKEN_CONTRACTS = {
 
 
 def _is_spoofed_token(symbol, contract_address):
-   
     symbol = symbol or ""
     if not symbol.isascii():
         return True
-
     upper = symbol.upper()
     if upper in KNOWN_REAL_TOKEN_CONTRACTS:
         real_address = KNOWN_REAL_TOKEN_CONTRACTS[upper]
         if (contract_address or "").lower() != real_address:
             return True
-
     return False
 
 
-def _fetch(action, address, api_key, chain_id, limit):
+def _fetch(action, address, api_key, chain_id, limit, extra_params=""):
     url = (
         f"{BASE_URL}?chainid={chain_id}"
         f"&module=account&action={action}&address={address}"
-        f"&sort=desc&apikey={api_key}"
+        f"&sort=desc{extra_params}&apikey={api_key}"
     )
-    resp = requests.get(url).json()
+    try:
+        resp = requests.get(url, timeout=15).json()
+    except requests.RequestException as exc:
+        print(f"[tracer] network error on {action}: {exc}")
+        return []
+
     if resp.get("status") != "1":
-        print(f"[tracer] {action} -> {resp.get('message')}: {resp.get('result')}")
+        print(f"[tracer] {action} (chain {chain_id}) -> {resp.get('message')}: {resp.get('result')}")
         return []
     return resp["result"][:limit]
 
 
 def get_eth_transactions(address, api_key, chain_id=1, limit=10):
-  
     raw = _fetch("txlist", address, api_key, chain_id, limit)
     outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
 
@@ -53,12 +51,12 @@ def get_eth_transactions(address, api_key, chain_id=1, limit=10):
             "from": tx["from"], "to": tx["to"], "value": tx["value"],
             "token": "ETH", "type": tx_type, "tx_hash": tx["hash"],
             "timestamp": int(tx["timeStamp"]), "is_spoofed_token": False,
+            "chain_id": chain_id,
         })
     return results
 
 
 def get_token_transactions(address, api_key, chain_id=1, limit=10):
-  
     raw = _fetch("tokentx", address, api_key, chain_id, limit)
     outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
 
@@ -74,12 +72,12 @@ def get_token_transactions(address, api_key, chain_id=1, limit=10):
             "token": symbol, "token_contract": contract_address,
             "type": "erc20_transfer", "tx_hash": tx["hash"],
             "timestamp": int(tx["timeStamp"]), "is_spoofed_token": spoofed,
+            "chain_id": chain_id,
         })
     return results
 
 
 def get_internal_transactions(address, api_key, chain_id=1, limit=10):
-  
     raw = _fetch("txlistinternal", address, api_key, chain_id, limit)
     outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
 
@@ -89,18 +87,24 @@ def get_internal_transactions(address, api_key, chain_id=1, limit=10):
             "from": tx["from"], "to": tx["to"], "value": tx["value"],
             "token": "ETH", "type": "internal_transfer",
             "tx_hash": tx.get("hash", ""), "timestamp": int(tx["timeStamp"]),
-            "is_spoofed_token": False,
+            "is_spoofed_token": False, "chain_id": chain_id,
         })
     return results
 
 
-# Transaction types whose `to` address represents a real wallet/entity
-# worth continuing the trace from.
+def get_incoming_transactions(address, api_key, chain_id=1, limit=5):
+   
+    raw = _fetch("txlist", address, api_key, chain_id, limit)
+    incoming = [tx for tx in raw if tx["to"] and tx["to"].lower() == address.lower()]
+    if not incoming:
+        return None
+    return min(int(tx["timeStamp"]) for tx in incoming)
+
+
 HOPPABLE_TYPES = {"eth_transfer", "erc20_transfer", "internal_transfer"}
 
 
 def get_all_transactions(address, api_key, chain_id=1, limit_per_type=5):
-   
     eth = get_eth_transactions(address, api_key, chain_id, limit_per_type)
     tokens = get_token_transactions(address, api_key, chain_id, limit_per_type)
     internal = get_internal_transactions(address, api_key, chain_id, limit_per_type)
@@ -108,8 +112,9 @@ def get_all_transactions(address, api_key, chain_id=1, limit_per_type=5):
 
 
 def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, limit_per_type=5):
-    
+   
     all_edges = []
+    incoming_timestamps = {}
     current_layer = [start_address]
     visited = set()
 
@@ -119,6 +124,11 @@ def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, limit_per_type=
             if addr.lower() in visited:
                 continue
             visited.add(addr.lower())
+
+            if addr.lower() != start_address.lower():
+                first_in = get_incoming_transactions(addr, api_key, chain_id)
+                if first_in:
+                    incoming_timestamps[addr] = first_in
 
             txns = get_all_transactions(addr, api_key, chain_id, limit_per_type)
             for tx in txns:
@@ -131,4 +141,27 @@ def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, limit_per_type=
         if not current_layer:
             break
 
-    return all_edges
+    return all_edges, incoming_timestamps
+
+
+def cross_chain_reuse_check(address, api_key, primary_chain_id=1, other_chains=None):
+    """
+    Heuristic cross-chain check: many bridges (especially LayerZero-based
+    ones like Stargate, and address-preserving message bridges) credit
+    the SAME address on the destination chain. This checks whether the
+    traced address has any activity on other configured chains at all -
+    a lightweight, honest substitute for full bridge event decoding.
+
+    Returns a dict of {chain_name: tx_count} for chains where the address
+    has activity, excluding the primary chain.
+    """
+    if other_chains is None:
+        other_chains = [cid for cid in SUPPORTED_CHAINS if cid != primary_chain_id]
+
+    findings = {}
+    for cid in other_chains:
+        txns = _fetch("txlist", address, api_key, cid, limit=1)
+        if txns:
+            findings[SUPPORTED_CHAINS.get(cid, str(cid))] = cid
+        time.sleep(0.2)  # stay well under free-tier rate limits
+    return findings
