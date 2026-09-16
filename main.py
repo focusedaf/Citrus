@@ -27,14 +27,10 @@ from config import DEFAULT_CHAIN_ID
 
 load_dotenv()
 API_KEY = os.getenv("ETHERSCAN_KEY")
-
-
 app = FastAPI(
     title="CITRUS",
     version="1.0.0",
 )
-
-
 
 
 @app.on_event("startup")
@@ -46,9 +42,6 @@ def on_startup():
     except Exception as exc:
         print(f"[DB] Database initialization failed: {exc}")
         raise
-
-
-
 
 def _edge_amount(e):
 
@@ -63,7 +56,7 @@ def _edge_amount(e):
 @app.get("/")
 def root():
     return {
-        "message": "CITRUS - Crypto Fraud Attribution System API is running",
+        "message": "CITRUS",
         "database": "Neon PostgreSQL",
         "endpoints": {
             "dashboard": "/dashboard",
@@ -73,9 +66,6 @@ def root():
             "docs": "/docs",
         },
     }
-
-
-
 
 @app.post("/trace")
 def trace(
@@ -289,10 +279,6 @@ def trace(
 
 @app.post("/ingest-complaint")
 def ingest_complaint(address: str):
-    """
-    Mock endpoint simulating ingestion from NCRP/SAHYOG.
-    """
-
     print(
         f"[MOCK] Complaint received for wallet: {address}"
     )
@@ -385,7 +371,6 @@ def list_traces(limit: int = 50):
     return get_all_traces(limit)
 
 
-
 @app.get("/alerts")
 def list_alerts(limit: int = 50):
 
@@ -396,8 +381,6 @@ def list_alerts(limit: int = 50):
         )
 
     return get_all_alerts(limit)
-
-
 
 
 @app.get("/report/{trace_id}")
