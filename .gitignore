@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+graph.html
+*.log
+.DS_Store
+.vscode/
+.idea/
