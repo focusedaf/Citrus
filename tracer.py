@@ -2,6 +2,31 @@ import requests
 
 BASE_URL = "https://api.etherscan.io/v2/api"
 
+# Real, verified contract addresses for widely-impersonated tokens.
+# If a transfer claims one of these symbols but comes from a DIFFERENT
+# contract address, it's not the real token - it's a lookalike/scam token.
+KNOWN_REAL_TOKEN_CONTRACTS = {
+    "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "DAI": "0x6b175474e89094c44da98b954eedeac495271d0f",
+    "WETH": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+}
+
+
+def _is_spoofed_token(symbol, contract_address):
+   
+    symbol = symbol or ""
+    if not symbol.isascii():
+        return True
+
+    upper = symbol.upper()
+    if upper in KNOWN_REAL_TOKEN_CONTRACTS:
+        real_address = KNOWN_REAL_TOKEN_CONTRACTS[upper]
+        if (contract_address or "").lower() != real_address:
+            return True
+
+    return False
+
 
 def _fetch(action, address, api_key, chain_id, limit):
     url = (
@@ -27,31 +52,34 @@ def get_eth_transactions(address, api_key, chain_id=1, limit=10):
         results.append({
             "from": tx["from"], "to": tx["to"], "value": tx["value"],
             "token": "ETH", "type": tx_type, "tx_hash": tx["hash"],
-            "timestamp": int(tx["timeStamp"]),
+            "timestamp": int(tx["timeStamp"]), "is_spoofed_token": False,
         })
     return results
 
 
 def get_token_transactions(address, api_key, chain_id=1, limit=10):
-    
+  
     raw = _fetch("tokentx", address, api_key, chain_id, limit)
     outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
 
     results = []
     for tx in outgoing:
         decimals = int(tx.get("tokenDecimal", 18) or 18)
+        symbol = tx.get("tokenSymbol", "UNKNOWN")
+        contract_address = tx.get("contractAddress", "")
+        spoofed = _is_spoofed_token(symbol, contract_address)
         results.append({
             "from": tx["from"], "to": tx["to"],
             "value": tx["value"], "value_decimals": decimals,
-            "token": tx.get("tokenSymbol", "UNKNOWN"),
+            "token": symbol, "token_contract": contract_address,
             "type": "erc20_transfer", "tx_hash": tx["hash"],
-            "timestamp": int(tx["timeStamp"]),
+            "timestamp": int(tx["timeStamp"]), "is_spoofed_token": spoofed,
         })
     return results
 
 
 def get_internal_transactions(address, api_key, chain_id=1, limit=10):
- 
+  
     raw = _fetch("txlistinternal", address, api_key, chain_id, limit)
     outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
 
@@ -61,10 +89,13 @@ def get_internal_transactions(address, api_key, chain_id=1, limit=10):
             "from": tx["from"], "to": tx["to"], "value": tx["value"],
             "token": "ETH", "type": "internal_transfer",
             "tx_hash": tx.get("hash", ""), "timestamp": int(tx["timeStamp"]),
+            "is_spoofed_token": False,
         })
     return results
 
 
+# Transaction types whose `to` address represents a real wallet/entity
+# worth continuing the trace from.
 HOPPABLE_TYPES = {"eth_transfer", "erc20_transfer", "internal_transfer"}
 
 
@@ -77,7 +108,7 @@ def get_all_transactions(address, api_key, chain_id=1, limit_per_type=5):
 
 
 def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, limit_per_type=5):
-  
+    
     all_edges = []
     current_layer = [start_address]
     visited = set()

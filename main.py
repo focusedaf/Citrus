@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from tracer import trace_wallet
-from graph_utils import build_graph, render_graph, investigation_table
+from graph_utils import build_graph, render_graph, investigation_table, investigation_summary
 from tagging import tag_all
 from risk_engine import compute_risk
 
@@ -32,19 +32,23 @@ def trace(address: str, chain_id: int = 1, max_hops: int = 3):
     edges = trace_wallet(address, API_KEY, chain_id=chain_id, max_hops=max_hops)
 
     if not edges:
+        empty_risk = compute_risk([], {}, address)
         return {
             "address": address,
             "message": "No outgoing transactions found (or address is inactive).",
             "edges": [],
             "tags": {},
             "investigation_table": [],
-            "risk": compute_risk([], {}, address),
+            "summary": None,
+            "risk": empty_risk,
         }
 
     G = build_graph(edges)
     tags = tag_all(G.nodes)
     risk = compute_risk(edges, tags, address)
     table = investigation_table(G, tags)
+    summary = investigation_summary(G, tags, edges, address, risk)
+
     render_graph(G, tags=tags, output_file="graph.html")
 
     return {
@@ -56,11 +60,13 @@ def trace(address: str, chain_id: int = 1, max_hops: int = 3):
                 "amount": _edge_amount(e),
                 "hop": e["hop"], "timestamp": e["timestamp"],
                 "tx_hash": e["tx_hash"],
+                "is_spoofed_token": e.get("is_spoofed_token", False),
             }
             for e in edges
         ],
         "tags": tags,
         "investigation_table": table,
+        "summary": summary,
         "risk": risk,
     }
 
@@ -69,8 +75,6 @@ def trace(address: str, chain_id: int = 1, max_hops: int = 3):
 def ingest_complaint(address: str):
     """
     Mock endpoint simulating ingestion from NCRP/SAHYOG complaint systems.
-    In production this would be a webhook triggered by the complaint portal
-    instead of a manually-called endpoint.
     """
     print(f"[MOCK] Complaint received for wallet: {address}")
     return trace(address)

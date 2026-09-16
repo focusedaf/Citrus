@@ -4,6 +4,7 @@ FAN_OUT_THRESHOLD = 5
 
 WEIGHTS = {
     "mixer_exposure": 40,
+    "spoofed_token": 35,   # scam-token exposure is a strong phishing/scam signal
     "bridge_exposure": 25,
     "vasp_exposure": 30,
     "deep_hops": 15,
@@ -26,19 +27,22 @@ def _to_eth(edge):
 
 
 def compute_metrics(edges, tags):
-   
     unique_hops = max([e["hop"] for e in edges], default=-1) + 1
     transaction_count = len(edges)
     unique_counterparties = len({e["to"] for e in edges if e["to"]})
 
-    matched_types = {tag["type"] for tag in tags.values() if tag}
-    vasp_exposure = "exchange" in matched_types
+    matched_types = {tag["entity_type"] for tag in tags.values() if tag}
+    vasp_exposure = "vasp" in matched_types
     bridge_exposure = "bridge" in matched_types
     mixer_exposure = "mixer" in matched_types
 
+    # Fan-out: distinct addresses funded DIRECTLY from the source (hop 0).
     fan_out = len({e["to"] for e in edges if e["hop"] == 0 and e["to"]})
 
     large_value = any(_to_eth(e) >= LARGE_VALUE_ETH_THRESHOLD for e in edges)
+
+    spoofed_edges = [e for e in edges if e.get("is_spoofed_token")]
+    spoofed_token_detected = len(spoofed_edges) > 0
 
     return {
         "unique_hops": unique_hops,
@@ -49,11 +53,12 @@ def compute_metrics(edges, tags):
         "mixer_exposure": mixer_exposure,
         "fan_out": fan_out,
         "large_value_transfer": large_value,
+        "spoofed_token_detected": spoofed_token_detected,
+        "spoofed_token_count": len(spoofed_edges),
     }
 
 
 def compute_risk(edges, tags, start_address=None):
-   
     if not edges:
         return {
             "score": 0, "level": "Low",
@@ -69,13 +74,20 @@ def compute_risk(edges, tags, start_address=None):
         score += WEIGHTS["mixer_exposure"]
         reasons.append(f"+{WEIGHTS['mixer_exposure']} funds passed through a known mixer")
 
+    if metrics["spoofed_token_detected"]:
+        score += WEIGHTS["spoofed_token"]
+        reasons.append(
+            f"+{WEIGHTS['spoofed_token']} spoofed/lookalike token detected "
+            f"({metrics['spoofed_token_count']} transfer(s) impersonating a known token)"
+        )
+
     if metrics["bridge_exposure"]:
         score += WEIGHTS["bridge_exposure"]
         reasons.append(f"+{WEIGHTS['bridge_exposure']} funds crossed a known bridge (cross-chain movement)")
 
     if metrics["vasp_exposure"]:
         score += WEIGHTS["vasp_exposure"]
-        reasons.append(f"+{WEIGHTS['vasp_exposure']} funds reached a known exchange")
+        reasons.append(f"+{WEIGHTS['vasp_exposure']} funds reached a known VASP")
 
     if metrics["unique_hops"] >= DEEP_HOP_THRESHOLD:
         score += WEIGHTS["deep_hops"]
