@@ -35,7 +35,6 @@ app = FastAPI(
 
 @app.on_event("startup")
 def on_startup():
-    
     try:
         init_db()
         print("[DB] Database initialized successfully.")
@@ -44,7 +43,6 @@ def on_startup():
         raise
 
 def _edge_amount(e):
-
     if e["token"] == "ETH":
         return float(e["value"]) / 1e18
 
@@ -74,21 +72,18 @@ def trace(
     max_hops: int = 3,
     check_cross_chain: bool = True,
 ):
-   
     if not API_KEY:
         raise HTTPException(
             status_code=500,
             detail="ETHERSCAN_KEY not set in .env",
         )
 
-  
     edges, incoming_timestamps = trace_wallet(
         address,
         API_KEY,
         chain_id=chain_id,
         max_hops=max_hops,
     )
-
 
     if not edges:
 
@@ -98,7 +93,6 @@ def trace(
             address,
         )
 
-        # Create a proper summary instead of storing {}
         empty_summary = {
             "reported_address": address,
             "chain": "Ethereum",
@@ -120,7 +114,6 @@ def trace(
             "risk_score": 0,
         }
 
-       
         trace_id = save_trace(
             address,
             chain_id,
@@ -129,7 +122,6 @@ def trace(
             empty_risk,
         )
 
-        
         report_path = generate_pdf_report(
             empty_summary,
             empty_risk,
@@ -151,7 +143,6 @@ def trace(
             "alert_raised": None,
         }
 
-   
     G = build_graph(edges)
     tags = tag_all(G.nodes)
     cross_chain_findings = {}
@@ -162,7 +153,6 @@ def trace(
             API_KEY,
             primary_chain_id=chain_id,
         )
-
 
     risk = compute_risk(
         edges,
@@ -189,10 +179,10 @@ def trace(
     graph_path = render_graph(
         G,
         tags=tags,
+        start_address=address,
         output_file="graph.html",
     )
 
- 
     serialized_edges = []
 
     for e in edges:
@@ -214,7 +204,6 @@ def trace(
             }
         )
 
-    
     trace_id = save_trace(
         address,
         chain_id,
@@ -224,7 +213,6 @@ def trace(
     )
 
     print(f"[DB] Trace saved successfully. trace_id={trace_id}")
-
 
     report_path = generate_pdf_report(
         summary,
@@ -269,7 +257,6 @@ def trace(
 
         "report_path": report_path,
 
-        # Browser-accessible URLs
         "report_url": f"/report/{trace_id}",
         "graph_url": "/graph",
 
@@ -299,7 +286,6 @@ def ingest_complaint(address: str):
     response_class=HTMLResponse,
 )
 def dashboard():
-  
     html = generate_dashboard_html()
 
     return HTMLResponse(
@@ -313,7 +299,6 @@ def dashboard():
     response_class=HTMLResponse,
 )
 def dashboard_trace(trace_id: int):
-   
     html = get_trace_detail(trace_id)
 
     return HTMLResponse(
@@ -322,14 +307,11 @@ def dashboard_trace(trace_id: int):
     )
 
 
-
 @app.get(
     "/graph",
     response_class=HTMLResponse,
 )
 def graph():
-   
-
     graph_path = "graph.html"
 
     if not os.path.exists(graph_path):
@@ -356,7 +338,6 @@ def graph():
         content=html,
         status_code=200,
     )
-
 
 
 @app.get("/traces")
@@ -396,7 +377,6 @@ def view_report(trace_id: int):
             detail="Trace not found",
         )
 
-
     summary = trace_row["summary_json"]
 
     if not summary:
@@ -404,7 +384,6 @@ def view_report(trace_id: int):
             status_code=500,
             detail="Trace exists but contains no report summary.",
         )
-
 
     risk = {
         "score": trace_row["risk_score"],
@@ -416,7 +395,6 @@ def view_report(trace_id: int):
         ),
     }
 
-  
     path = generate_pdf_report(
         summary,
         risk,
@@ -429,7 +407,6 @@ def view_report(trace_id: int):
             detail="PDF report could not be generated.",
         )
 
-    
     return FileResponse(
         path=path,
         media_type="application/pdf",
