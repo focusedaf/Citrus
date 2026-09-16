@@ -1,36 +1,84 @@
-"""
-handles fetching transaction data from Etherscan and following outgoing transactions hop-by-hop (BFS) from a starting wallet address
-
-"""
-
 import requests
 
 BASE_URL = "https://api.etherscan.io/v2/api"
 
 
-def get_transactions(address, api_key, chain_id=1, limit=10):
-    
+def _fetch(action, address, api_key, chain_id, limit):
     url = (
-        f"{BASE_URL}"
-        f"?chainid={chain_id}"
-        f"&module=account&action=txlist&address={address}"
+        f"{BASE_URL}?chainid={chain_id}"
+        f"&module=account&action={action}&address={address}"
         f"&sort=desc&apikey={api_key}"
     )
     resp = requests.get(url).json()
-
     if resp.get("status") != "1":
-        # status "0" can mean "no transactions found" OR an actual error
-        print(f"[tracer] Etherscan returned: {resp.get('message')} - {resp.get('result')}")
+        print(f"[tracer] {action} -> {resp.get('message')}: {resp.get('result')}")
         return []
-
-    transactions = resp["result"]
-    outgoing = [tx for tx in transactions if tx["from"].lower() == address.lower()]
-    return outgoing[:limit]
+    return resp["result"][:limit]
 
 
-def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, txns_per_hop=5):
+def get_eth_transactions(address, api_key, chain_id=1, limit=10):
+  
+    raw = _fetch("txlist", address, api_key, chain_id, limit)
+    outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
+
+    results = []
+    for tx in outgoing:
+        tx_type = "eth_transfer" if tx.get("input", "0x") == "0x" else "contract_interaction"
+        results.append({
+            "from": tx["from"], "to": tx["to"], "value": tx["value"],
+            "token": "ETH", "type": tx_type, "tx_hash": tx["hash"],
+            "timestamp": int(tx["timeStamp"]),
+        })
+    return results
+
+
+def get_token_transactions(address, api_key, chain_id=1, limit=10):
+    
+    raw = _fetch("tokentx", address, api_key, chain_id, limit)
+    outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
+
+    results = []
+    for tx in outgoing:
+        decimals = int(tx.get("tokenDecimal", 18) or 18)
+        results.append({
+            "from": tx["from"], "to": tx["to"],
+            "value": tx["value"], "value_decimals": decimals,
+            "token": tx.get("tokenSymbol", "UNKNOWN"),
+            "type": "erc20_transfer", "tx_hash": tx["hash"],
+            "timestamp": int(tx["timeStamp"]),
+        })
+    return results
+
+
+def get_internal_transactions(address, api_key, chain_id=1, limit=10):
+ 
+    raw = _fetch("txlistinternal", address, api_key, chain_id, limit)
+    outgoing = [tx for tx in raw if tx["from"].lower() == address.lower()]
+
+    results = []
+    for tx in outgoing:
+        results.append({
+            "from": tx["from"], "to": tx["to"], "value": tx["value"],
+            "token": "ETH", "type": "internal_transfer",
+            "tx_hash": tx.get("hash", ""), "timestamp": int(tx["timeStamp"]),
+        })
+    return results
+
+
+HOPPABLE_TYPES = {"eth_transfer", "erc20_transfer", "internal_transfer"}
+
+
+def get_all_transactions(address, api_key, chain_id=1, limit_per_type=5):
    
-    graph_edges = []
+    eth = get_eth_transactions(address, api_key, chain_id, limit_per_type)
+    tokens = get_token_transactions(address, api_key, chain_id, limit_per_type)
+    internal = get_internal_transactions(address, api_key, chain_id, limit_per_type)
+    return eth + tokens + internal
+
+
+def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, limit_per_type=5):
+  
+    all_edges = []
     current_layer = [start_address]
     visited = set()
 
@@ -41,15 +89,15 @@ def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, txns_per_hop=5)
                 continue
             visited.add(addr.lower())
 
-            txns = get_transactions(addr, api_key, chain_id=chain_id, limit=txns_per_hop)
+            txns = get_all_transactions(addr, api_key, chain_id, limit_per_type)
             for tx in txns:
-                to_addr = tx["to"]
-                if to_addr:
-                    graph_edges.append((addr, to_addr, tx["value"], tx["hash"]))
-                    next_layer.append(to_addr)
+                tx["hop"] = hop
+                all_edges.append(tx)
+                if tx["type"] in HOPPABLE_TYPES and tx["to"]:
+                    next_layer.append(tx["to"])
 
         current_layer = next_layer
         if not current_layer:
-            break 
+            break
 
-    return graph_edges
+    return all_edges
