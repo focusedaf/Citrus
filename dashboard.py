@@ -1,4 +1,3 @@
-
 import html
 import json
 import time
@@ -18,7 +17,7 @@ RISK_COLORS = {
 
 
 def esc(value):
-  
+
     return html.escape(str(value))
 
 
@@ -53,7 +52,7 @@ def format_list(value):
 
 
 def generate_dashboard_html():
-    
+
     traces = get_all_traces(limit=50)
     alerts = get_all_alerts(limit=50)
 
@@ -152,9 +151,14 @@ def generate_dashboard_html():
                     PDF
                 </a>
 
-                <a href="/graph"
+                <a href="/graph/{trace_id}"
                    target="_blank">
                     Graph
+                </a>
+
+                <a href="/evidence/{trace_id}"
+                   target="_blank">
+                    Evidence
                 </a>
 
             </td>
@@ -490,12 +494,38 @@ code {{
             </div>
         </div>
 
-        <a class="refresh"
-           href="/dashboard">
-            ↻ Refresh
-        </a>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span id="ar-status" style="color:#888; font-size:12px;">Auto-refresh: on (20s)</span>
+            <button class="refresh" onclick="citrusToggleAutoRefresh()" style="cursor:pointer;">
+                Pause
+            </button>
+            <a class="refresh" href="/dashboard">
+                ↻ Refresh now
+            </a>
+        </div>
 
     </div>
+
+    <script>
+        // Dashboard is server-rendered on request, not push-based — this
+        // just reloads the page periodically so a tab left open doesn't
+        // go stale. Pause it any time with the button above.
+        var citrusAutoRefreshTimer = setInterval(function() {{ location.reload(); }}, 20000);
+        function citrusToggleAutoRefresh() {{
+            var status = document.getElementById('ar-status');
+            var btn = event.target;
+            if (citrusAutoRefreshTimer) {{
+                clearInterval(citrusAutoRefreshTimer);
+                citrusAutoRefreshTimer = null;
+                status.textContent = 'Auto-refresh: paused';
+                btn.textContent = 'Resume';
+            }} else {{
+                citrusAutoRefreshTimer = setInterval(function() {{ location.reload(); }}, 20000);
+                status.textContent = 'Auto-refresh: on (20s)';
+                btn.textContent = 'Pause';
+            }}
+        }}
+    </script>
 
 
     <div class="stats">
@@ -612,7 +642,7 @@ code {{
 
 
 def generate_trace_detail_html(trace):
-   
+
     if not trace:
         return """
         <html>
@@ -998,12 +1028,17 @@ code {{
 
             <a href="/report/{trace_id}"
                target="_blank">
-                View PDF Report
+                Download PDF Report
             </a>
 
-            <a href="/graph"
+            <a href="/graph/{trace_id}"
                target="_blank">
-                Open Transaction Graph
+                Open Graph Full-Screen
+            </a>
+
+            <a href="/evidence/{trace_id}"
+               target="_blank">
+                Download Evidence Bundle
             </a>
 
         </div>
@@ -1072,6 +1107,40 @@ code {{
                 )} hops
             </div>
 
+        </div>
+
+    </div>
+
+
+    <div class="card">
+
+        <div class="card-header">
+            <h2>Transaction Graph</h2>
+        </div>
+
+        <div class="content" style="padding:0;">
+            <iframe
+                src="/graph/{trace_id}"
+                style="width:100%; height:640px; border:none; display:block;"
+                loading="lazy"
+            ></iframe>
+        </div>
+
+    </div>
+
+
+    <div class="card">
+
+        <div class="card-header">
+            <h2>PDF Report</h2>
+        </div>
+
+        <div class="content" style="padding:0;">
+            <iframe
+                src="/report/{trace_id}"
+                style="width:100%; height:640px; border:none; display:block; background:#fff;"
+                loading="lazy"
+            ></iframe>
         </div>
 
     </div>
@@ -1280,6 +1349,6 @@ code {{
 
 
 def get_trace_detail(trace_id):
-   
+
     trace = get_trace_by_id(trace_id)
     return generate_trace_detail_html(trace)

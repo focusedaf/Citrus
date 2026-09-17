@@ -5,7 +5,7 @@ from config import REPORTS_DIR
 
 
 def _safe_text(value):
-  
+
     return (
         str(value)
         .encode("latin-1", errors="replace")
@@ -112,8 +112,9 @@ def generate_pdf_report(
     risk,
     trace_id=None,
     output_path=None,
+    evidence=None,
 ):
-  
+    
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
     if output_path is None:
@@ -143,7 +144,7 @@ def generate_pdf_report(
 
     pdf.add_page()
 
-   
+
 
     pdf.section_title("Case Overview")
 
@@ -184,7 +185,7 @@ def generate_pdf_report(
 
     pdf.ln(3)
 
-   
+
 
     pdf.section_title(
         f"Risk Assessment - "
@@ -221,7 +222,7 @@ def generate_pdf_report(
 
     pdf.ln(3)
 
-   
+
 
     metrics = risk.get("metrics", {})
 
@@ -267,7 +268,7 @@ def generate_pdf_report(
 
         pdf.ln(3)
 
-  
+
 
     pdf.section_title("Entity Findings")
 
@@ -338,6 +339,38 @@ def generate_pdf_report(
     )
 
     pdf.ln(3)
+
+
+    if evidence:
+
+        pdf.section_title(
+            "Evidence & Chain of Custody"
+        )
+
+        pdf.kv_row(
+            "Evidence bundle:",
+            os.path.basename(evidence.get("path", "N/A")) if evidence.get("path") else "N/A",
+        )
+
+        pdf.kv_row(
+            "SHA-256 hash:",
+            evidence.get("hash", "N/A"),
+        )
+
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.multi_cell(
+            0,
+            5,
+            _safe_text(
+                "This hash covers the raw source-API records and derived "
+                "transaction edges this report was built from. Re-hashing "
+                "the stored evidence bundle and comparing it against this "
+                "value will detect any modification made after generation. "
+                "Verify via the /evidence/{trace_id}/verify endpoint."
+            ),
+        )
+
+        pdf.ln(3)
 
 
     pdf.section_title(

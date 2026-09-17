@@ -1,3 +1,8 @@
+import json
+import os
+import requests
+from config import BASE_URL, LABELS_FILE, ENABLE_CONTRACT_PROBING
+
 KNOWN_VASPS = {
     "0x28c6c06298d514db089934071355e5743bf21d60": ("exchange", "Binance 14"),
     "0xa9d1e08c7793af67e9d92fe308d5697fb81d3e43": ("exchange", "Coinbase 10"),
@@ -32,23 +37,158 @@ KNOWN_CONTRACTS = {
     "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": ("dex_router", "Uniswap V2 Router"),
 }
 
+# Decoded-function-name keyword heuristics (Etherscan returns `functionName`for verified contracts). These flag *likely* DeFi/bridge interactions even when the address itself isn't in any dict above. Always heuristic/unverified — never presented as a confirmed identification.
+DEFI_FUNCTION_KEYWORDS = {
+    "swap": ("dex_router", "Possible DEX/swap contract"),
+    "addliquidity": ("dex_lp", "Possible liquidity pool interaction"),
+    "removeliquidity": ("dex_lp", "Possible liquidity pool interaction"),
+    "stake": ("staking", "Possible staking contract"),
+    "unstake": ("staking", "Possible staking contract"),
+    "deposit": ("bridge_or_vault", "Possible bridge/vault deposit"),
+    "withdraw": ("bridge_or_vault", "Possible bridge/vault withdrawal"),
+    "bridge": ("cross_chain_bridge", "Possible bridge contract"),
+    "relay": ("cross_chain_bridge", "Possible relay/bridge contract"),
+    "lzsend": ("cross_chain_bridge", "Possible LayerZero bridge contract"),
+    "wrap": ("wrapper", "Possible token wrapper contract"),
+    "unwrap": ("wrapper", "Possible token wrapper contract"),
+    "mint": ("mint_burn", "Possible minting contract"),
+    "burn": ("mint_burn", "Possible burn contract"),
+}
+
+
+def _load_external_labels():
+   
+    empty = {"vasp": {}, "bridge": {}, "mixer": {}, "contract": {}}
+    if not LABELS_FILE or not os.path.exists(LABELS_FILE):
+        return empty
+    try:
+        with open(LABELS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for k in empty:
+            empty[k] = {
+                addr.lower(): label
+                for addr, label in (data.get(k) or {}).items()
+            }
+        return empty
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[tagging] failed to load LABELS_FILE ({LABELS_FILE}): {exc}")
+        return empty
+
+
+_EXTERNAL_LABELS = _load_external_labels()
+
 
 def tag_address(address):
+    
     addr = address.lower()
+
     if addr in KNOWN_VASPS:
         subtype, label = KNOWN_VASPS[addr]
-        return {"entity_type": "vasp", "entity_subtype": subtype, "label": label}
+        return {"entity_type": "vasp", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+    if addr in _EXTERNAL_LABELS["vasp"]:
+        return {"entity_type": "vasp", "entity_subtype": "exchange", "label": _EXTERNAL_LABELS["vasp"][addr], "confidence": "confirmed"}
+
     if addr in KNOWN_BRIDGES:
         subtype, label = KNOWN_BRIDGES[addr]
-        return {"entity_type": "bridge", "entity_subtype": subtype, "label": label}
+        return {"entity_type": "bridge", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+    if addr in _EXTERNAL_LABELS["bridge"]:
+        return {"entity_type": "bridge", "entity_subtype": "cross_chain_bridge", "label": _EXTERNAL_LABELS["bridge"][addr], "confidence": "confirmed"}
+
     if addr in KNOWN_MIXERS:
         subtype, label = KNOWN_MIXERS[addr]
-        return {"entity_type": "mixer", "entity_subtype": subtype, "label": label}
+        return {"entity_type": "mixer", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+    if addr in _EXTERNAL_LABELS["mixer"]:
+        return {"entity_type": "mixer", "entity_subtype": "tumbler", "label": _EXTERNAL_LABELS["mixer"][addr], "confidence": "confirmed"}
+
     if addr in KNOWN_CONTRACTS:
         subtype, label = KNOWN_CONTRACTS[addr]
-        return {"entity_type": "contract", "entity_subtype": subtype, "label": label}
+        return {"entity_type": "contract", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+    if addr in _EXTERNAL_LABELS["contract"]:
+        return {"entity_type": "contract", "entity_subtype": "contract", "label": _EXTERNAL_LABELS["contract"][addr], "confidence": "confirmed"}
+
     return None
 
 
-def tag_all(addresses):
-    return {addr: tag_address(addr) for addr in addresses}
+def _heuristic_tag_from_functions(function_names):
+   
+    for fn in function_names:
+        fn_lower = (fn or "").lower()
+        for keyword, (subtype, label) in DEFI_FUNCTION_KEYWORDS.items():
+            if keyword in fn_lower:
+                return {
+                    "entity_type": "contract",
+                    "entity_subtype": subtype,
+                    "label": f"{label} (fn: {fn})",
+                    "confidence": "heuristic",
+                }
+    return None
+
+
+_CODE_CACHE = {}
+
+
+def _eth_get_code(address, api_key, chain_id):
+   
+    key = (address.lower(), chain_id)
+    if key in _CODE_CACHE:
+        return _CODE_CACHE[key]
+
+    url = (
+        f"{BASE_URL}?chainid={chain_id}&module=proxy&action=eth_getCode"
+        f"&address={address}&tag=latest&apikey={api_key}"
+    )
+    try:
+        resp = requests.get(url, timeout=10).json()
+        code = resp.get("result", "0x")
+        is_contract = bool(code) and code != "0x"
+    except (requests.RequestException, ValueError) as exc:
+        print(f"[tagging] eth_getCode failed for {address}: {exc}")
+        is_contract = None
+
+    _CODE_CACHE[key] = is_contract
+    return is_contract
+
+
+def tag_address_heuristic(address, function_names=None, api_key=None, chain_id=1):
+   
+    tag = tag_address(address)
+    if tag:
+        return tag
+
+    if function_names:
+        tag = _heuristic_tag_from_functions(function_names)
+        if tag:
+            return tag
+
+    if api_key and ENABLE_CONTRACT_PROBING:
+        is_contract = _eth_get_code(address, api_key, chain_id)
+        if is_contract is True:
+            return {
+                "entity_type": "contract",
+                "entity_subtype": "unverified_contract",
+                "label": "Unidentified contract (unlabeled)",
+                "confidence": "heuristic",
+            }
+
+    return None
+
+
+def tag_all(addresses, edges=None, api_key=None, chain_id=1):
+   
+    edges = edges or []
+    fn_by_address = {}
+    for e in edges:
+        fn = e.get("function_name")
+        to_addr = e.get("to")
+        if fn and to_addr:
+            fn_by_address.setdefault(to_addr.lower(), []).append(fn)
+
+    tags = {}
+    for addr in addresses:
+        tags[addr] = tag_address_heuristic(
+            addr,
+            function_names=fn_by_address.get(addr.lower()),
+            api_key=api_key,
+            chain_id=chain_id,
+        )
+    return tags

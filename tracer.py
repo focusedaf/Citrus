@@ -48,10 +48,13 @@ def get_eth_transactions(address, api_key, chain_id=1, limit=10):
     for tx in outgoing:
         tx_type = "eth_transfer" if tx.get("input", "0x") == "0x" else "contract_interaction"
         results.append({
-            "from": tx["from"], "to": tx["to"], "value": tx["value"],
+            "from": tx["from"].lower(), "to": (tx["to"] or "").lower(), "value": tx["value"],
             "token": "ETH", "type": tx_type, "tx_hash": tx["hash"],
             "timestamp": int(tx["timeStamp"]), "is_spoofed_token": False,
             "chain_id": chain_id,
+            "function_name": tx.get("functionName") or None,
+            "method_id": tx.get("methodId") or None,
+            "_raw": tx,
         })
     return results
 
@@ -67,12 +70,15 @@ def get_token_transactions(address, api_key, chain_id=1, limit=10):
         contract_address = tx.get("contractAddress", "")
         spoofed = _is_spoofed_token(symbol, contract_address)
         results.append({
-            "from": tx["from"], "to": tx["to"],
+            "from": tx["from"].lower(), "to": (tx["to"] or "").lower(),
             "value": tx["value"], "value_decimals": decimals,
             "token": symbol, "token_contract": contract_address,
             "type": "erc20_transfer", "tx_hash": tx["hash"],
             "timestamp": int(tx["timeStamp"]), "is_spoofed_token": spoofed,
             "chain_id": chain_id,
+            "function_name": None,
+            "method_id": None,
+            "_raw": tx,
         })
     return results
 
@@ -84,16 +90,19 @@ def get_internal_transactions(address, api_key, chain_id=1, limit=10):
     results = []
     for tx in outgoing:
         results.append({
-            "from": tx["from"], "to": tx["to"], "value": tx["value"],
+            "from": tx["from"].lower(), "to": (tx["to"] or "").lower(), "value": tx["value"],
             "token": "ETH", "type": "internal_transfer",
             "tx_hash": tx.get("hash", ""), "timestamp": int(tx["timeStamp"]),
             "is_spoofed_token": False, "chain_id": chain_id,
+            "function_name": None,
+            "method_id": None,
+            "_raw": tx,
         })
     return results
 
 
 def get_incoming_transactions(address, api_key, chain_id=1, limit=5):
-   
+
     raw = _fetch("txlist", address, api_key, chain_id, limit)
     incoming = [tx for tx in raw if tx["to"] and tx["to"].lower() == address.lower()]
     if not incoming:
@@ -112,7 +121,8 @@ def get_all_transactions(address, api_key, chain_id=1, limit_per_type=5):
 
 
 def trace_wallet(start_address, api_key, chain_id=1, max_hops=3, limit_per_type=5):
-   
+
+    start_address = start_address.lower()
     all_edges = []
     incoming_timestamps = {}
     current_layer = [start_address]
@@ -154,6 +164,11 @@ def cross_chain_reuse_check(address, api_key, primary_chain_id=1, other_chains=N
 
     Returns a dict of {chain_name: tx_count} for chains where the address
     has activity, excluding the primary chain.
+
+    LIMITATION (unchanged): this does not match a specific bridge deposit
+    to its destination-chain payout — it only tells you the address is
+    active elsewhere too. Real bridge-event correlation would need to
+    decode each bridge contract's deposit/mint events individually.
     """
     if other_chains is None:
         other_chains = [cid for cid in SUPPORTED_CHAINS if cid != primary_chain_id]
@@ -163,5 +178,5 @@ def cross_chain_reuse_check(address, api_key, primary_chain_id=1, other_chains=N
         txns = _fetch("txlist", address, api_key, cid, limit=1)
         if txns:
             findings[SUPPORTED_CHAINS.get(cid, str(cid))] = cid
-        time.sleep(0.2)  # stay well under free-tier rate limits
+        time.sleep(0.2)  
     return findings

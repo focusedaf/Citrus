@@ -33,12 +33,13 @@ def build_graph(edges):
             tx_type=e["type"], hop=e["hop"],
             timestamp=e["timestamp"], tx_hash=e["tx_hash"],
             is_spoofed_token=e.get("is_spoofed_token", False),
+            function_name=e.get("function_name"),
         )
     return G
 
 
 def _short_addr(addr, front=10, back=6):
-   
+
     if len(addr) <= front + back + 3:
         return addr
     return f"{addr[:front]}...{addr[-back:]}"
@@ -53,18 +54,21 @@ def _format_amount(value):
 
 
 def aggregate_edges(G):
-   
+
     agg = defaultdict(lambda: {
         "tx_count": 0,
         "totals": defaultdict(float),
         "spoofed": False,
         "hops": set(),
+        "functions": set(),
     })
 
     for src, dst, data in G.edges(data=True):
         entry = agg[(src, dst)]
         entry["tx_count"] += 1
         entry["hops"].add(data["hop"])
+        if data.get("function_name"):
+            entry["functions"].add(data["function_name"])
 
         token_key = data["token"]
         if data.get("is_spoofed_token"):
@@ -88,6 +92,7 @@ def investigation_table(G, tags):
             "entity": tag["label"] if tag else "Unidentified",
             "entity_type": tag["entity_type"] if tag else "unknown",
             "entity_subtype": tag["entity_subtype"] if tag else "unknown",
+            "confidence": tag.get("confidence", "unknown") if tag else "n/a",
             "hop": min(hops) if hops else None,
             "transaction_count": G.in_degree(node) + G.out_degree(node),
         })
@@ -150,7 +155,8 @@ def _node_style(node, tag, is_start, degree):
             "highlight": {"background": base, "border": "#ffffff"},
         }
         border_width = 1
-        entity_line = f"{tag['label']} ({tag['entity_type'].upper()})"
+        confidence_tag = " [heuristic]" if tag.get("confidence") == "heuristic" else ""
+        entity_line = f"{tag['label']} ({tag['entity_type'].upper()}){confidence_tag}"
     else:
         shape = "dot"
         color = {
@@ -163,8 +169,7 @@ def _node_style(node, tag, is_start, degree):
 
     label = f"{short}\n{entity_line}" if (is_start or tag) else short
 
-    # Size scales gently with how connected the node is, so hubs stand
-    # out in the layout instead of every node looking equally important.
+    
     size = 16 + min(degree, 12) * 2
     if is_start:
         size += 6
@@ -174,6 +179,8 @@ def _node_style(node, tag, is_start, degree):
         entity_line,
         f"Connections: {degree}",
     ]
+    if tag and tag.get("confidence") == "heuristic":
+        title_lines.append("⚠ Heuristic identification — not confirmed, verify independently.")
     title = "\n".join(title_lines)
 
     return label, color, shape, size, border_width, title
@@ -202,6 +209,8 @@ def _edge_style(data):
     ]
     if data["spoofed"]:
         title_lines.append("⚠ Includes a spoofed/lookalike token transfer")
+    if data["functions"]:
+        title_lines.append(f"Function(s) called: {', '.join(sorted(data['functions']))}")
 
     title = "\n".join(title_lines)
     width = 1 + min(tx_count, 8)
@@ -215,47 +224,179 @@ LEGEND_HTML = """
     background:#1a1a1a; border:1px solid #3a3a3a; border-radius:10px;
     padding:14px 16px; color:#eee;
     font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif;
-    font-size:12px; line-height:1.9; width:220px;
+    font-size:12px; line-height:1.9; width:230px;
     box-shadow:0 4px 18px rgba(0,0,0,0.5);
+    max-height:88vh; overflow-y:auto;
 ">
-    <div style="font-weight:700; font-size:13px; margin-bottom:8px;">Legend</div>
-    <div><span style="display:inline-block;width:13px;height:13px;background:#f1c40f;border:1px solid #ffffff;margin-right:8px;clip-path:polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%);"></span>Reported wallet (trace start)</div>
-    <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e74c3c;margin-right:8px;"></span>Known VASP / exchange</div>
-    <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#f39c12;margin-right:8px;"></span>Known bridge</div>
-    <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#8e44ad;margin-right:8px;"></span>Known mixer / tumbler</div>
-    <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#7f8c8d;margin-right:8px;"></span>Known infrastructure contract</div>
-    <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#3498db;margin-right:8px;"></span>Unidentified wallet</div>
-    <hr style="border:none;border-top:1px solid #3a3a3a;margin:8px 0;">
-    <div><span style="display:inline-block;width:18px;height:2px;background:#5dade2;margin-right:8px;vertical-align:middle;"></span>Normal transfer(s)</div>
-    <div><span style="display:inline-block;width:18px;height:2px;background:#e74c3c;margin-right:8px;vertical-align:middle;border-top:2px dashed #e74c3c;"></span>⚠ Spoofed/fake token transfer</div>
-    <hr style="border:none;border-top:1px solid #3a3a3a;margin:8px 0;">
-    <div style="color:#888;">Edge label = transaction count. Hover any node or edge for full details.</div>
+    <div class="legend-header" style="font-weight:700; font-size:13px; margin-bottom:8px; cursor:pointer; user-select:none;">
+        Legend <span class="legend-toggle" style="float:right; color:#888;">&#9650;</span>
+    </div>
+    <div class="legend-body">
+        <div><span style="display:inline-block;width:13px;height:13px;background:#f1c40f;border:1px solid #ffffff;margin-right:8px;clip-path:polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%);"></span>Reported wallet (trace start)</div>
+        <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e74c3c;margin-right:8px;"></span>Known VASP / exchange</div>
+        <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#f39c12;margin-right:8px;"></span>Known bridge</div>
+        <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#8e44ad;margin-right:8px;"></span>Known mixer / tumbler</div>
+        <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#7f8c8d;margin-right:8px;"></span>Known / heuristic contract</div>
+        <div><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#3498db;margin-right:8px;"></span>Unidentified wallet</div>
+        <hr style="border:none;border-top:1px solid #3a3a3a;margin:8px 0;">
+        <div><span style="display:inline-block;width:18px;height:2px;background:#5dade2;margin-right:8px;vertical-align:middle;"></span>Normal transfer(s)</div>
+        <div><span style="display:inline-block;width:18px;height:2px;background:#e74c3c;margin-right:8px;vertical-align:middle;border-top:2px dashed #e74c3c;"></span>⚠ Spoofed/fake token transfer</div>
+        <hr style="border:none;border-top:1px solid #3a3a3a;margin:8px 0;">
+        <div style="color:#888;">Edge label = transaction count. Hover any node or edge for full details. Gray/purple/red/orange dots without a confidence note are confirmed matches; anything marked [heuristic] is an unverified guess.</div>
+    </div>
 </div>
 """
 
 
-def _inject_legend(output_file):
-    """
-    pyvis has no built-in legend, so append a small fixed-position
-    overlay describing the color/line coding directly into the
-    generated HTML file.
-    """
+def _controls_and_style_html(stats):
+    return f"""
+<style>
+  html, body {{ margin:0; padding:0; height:100%; overflow:hidden; }}
+  #mynetwork {{ box-sizing:border-box; }}
+  div.vis-network {{ outline:none; }}
+
+  /* pyvis/vis-network's built-in nav buttons default to the bottom-left
+     of the network container and were getting clipped by the viewport
+     edge. Pull them up above the fold and make them easier to hit. */
+  div.vis-navigation {{
+    bottom: 78px !important;
+    left: 20px !important;
+    z-index: 999;
+  }}
+  div.vis-button {{ transform: scale(1.15); }}
+
+  #citrus-legend {{ transition: all 0.15s ease; }}
+  #citrus-legend.collapsed .legend-body {{ display:none; }}
+  #citrus-legend.collapsed .legend-toggle {{ transform: rotate(180deg); display:inline-block; }}
+
+  #citrus-controls {{
+    position: fixed; top: 14px; left: 14px; z-index: 1000;
+    background:#1a1a1a; border:1px solid #3a3a3a; border-radius:10px;
+    padding:12px 14px; color:#eee;
+    font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif;
+    font-size:12px; width:230px;
+    box-shadow:0 4px 18px rgba(0,0,0,0.5);
+  }}
+  #citrus-controls input {{
+    width:100%; box-sizing:border-box; padding:7px 8px; margin-top:6px;
+    background:#111; border:1px solid #3a3a3a; border-radius:6px; color:#eee;
+  }}
+  #citrus-controls button {{
+    margin-top:8px; margin-right:6px; padding:6px 10px;
+    background:#252525; border:1px solid #3a3a3a; border-radius:6px;
+    color:#ddd; cursor:pointer; font-size:12px;
+  }}
+  #citrus-controls button:hover {{ background:#303030; }}
+  #citrus-stats {{ margin-top:10px; padding-top:10px; border-top:1px solid #3a3a3a; color:#aaa; line-height:1.7; }}
+  #citrus-search-status {{ margin-top:6px; color:#f39c12; font-size:11px; min-height:14px; }}
+</style>
+
+<div id="citrus-controls">
+  <div style="font-weight:700;font-size:13px;">Graph Controls</div>
+  <input id="citrus-search" type="text" placeholder="Search address...">
+  <div id="citrus-search-status"></div>
+  <div>
+    <button onclick="citrusFit()">Fit to screen</button>
+    <button onclick="citrusTogglePhysics()">Toggle physics</button>
+  </div>
+  <div id="citrus-stats">
+    <div>Nodes: {stats['nodes']}</div>
+    <div>Unique wallet-pairs: {stats['edges']}</div>
+    <div>Transactions: {stats['tx_count']}</div>
+    <div>Spoofed transfers: {stats['spoofed']}</div>
+    <div>Assets seen: {stats['assets']}</div>
+  </div>
+</div>
+
+<script>
+  var citrusPhysicsOn = true;
+
+  function citrusFit() {{
+    if (typeof network !== 'undefined') {{
+      network.fit({{ animation: {{ duration: 500, easingFunction: 'easeInOutQuad' }} }});
+    }}
+  }}
+
+  function citrusTogglePhysics() {{
+    if (typeof network !== 'undefined') {{
+      citrusPhysicsOn = !citrusPhysicsOn;
+      network.setOptions({{ physics: {{ enabled: citrusPhysicsOn }} }});
+    }}
+  }}
+
+  document.addEventListener('DOMContentLoaded', function() {{
+    // Auto-fit on load so the whole graph is visible immediately instead
+    // of requiring a manual "Fit to screen" click every time.
+    setTimeout(function() {{ citrusFit(); }}, 150);
+
+    var searchBox = document.getElementById('citrus-search');
+    if (searchBox) {{
+      searchBox.addEventListener('keyup', function() {{
+        var q = this.value.trim().toLowerCase();
+        var status = document.getElementById('citrus-search-status');
+        if (!q) {{ status.textContent = ''; return; }}
+        if (typeof network === 'undefined') return;
+        var allNodes = network.body.data.nodes.get();
+        var match = allNodes.find(function(n) {{
+          return (n.id + '').toLowerCase().indexOf(q) !== -1;
+        }});
+        if (match) {{
+          network.selectNodes([match.id]);
+          network.focus(match.id, {{ scale: 1.3, animation: {{ duration: 400 }} }});
+          status.textContent = 'Found: ' + match.id;
+        }} else {{
+          status.textContent = 'No match';
+        }}
+      }});
+    }}
+
+    var legend = document.getElementById('citrus-legend');
+    if (legend) {{
+      var header = legend.querySelector('.legend-header');
+      if (header) {{
+        header.addEventListener('click', function() {{
+          legend.classList.toggle('collapsed');
+        }});
+      }}
+    }}
+  }});
+</script>
+"""
+
+
+def _inject_overlays(output_file, stats):
+   
     with open(output_file, "r", encoding="utf-8") as f:
         html = f.read()
 
+    overlay = LEGEND_HTML + _controls_and_style_html(stats)
+
     if "</body>" in html:
-        html = html.replace("</body>", LEGEND_HTML + "</body>")
+        html = html.replace("</body>", overlay + "</body>")
     else:
-        html += LEGEND_HTML
+        html += overlay
 
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(html)
 
 
+def _compute_stats(G, edges_agg):
+    tx_count = G.number_of_edges()
+    spoofed = sum(1 for entry in edges_agg.values() if entry["spoofed"])
+    assets = len({tok.replace(" [FAKE]", "") for entry in edges_agg.values() for tok in entry["totals"]})
+    return {
+        "nodes": G.number_of_nodes(),
+        "edges": len(edges_agg),
+        "tx_count": tx_count,
+        "spoofed": spoofed,
+        "assets": assets,
+    }
+
+
 def render_graph(G, tags=None, start_address=None, output_file="graph.html"):
     net = Network(
         directed=True,
-        height="820px",
+        height="100vh",
         width="100%",
         bgcolor="#1e1e1e",
         font_color="white",
@@ -284,7 +425,9 @@ def render_graph(G, tags=None, start_address=None, output_file="graph.html"):
             font={"size": 13, "color": "#f5f5f5", "multi": False},
         )
 
-    for (src, dst), data in aggregate_edges(G).items():
+    edges_agg = aggregate_edges(G)
+
+    for (src, dst), data in edges_agg.items():
         edge_label, color, dashes, width, title = _edge_style(data)
 
         net.add_edge(
@@ -298,11 +441,7 @@ def render_graph(G, tags=None, start_address=None, output_file="graph.html"):
             font={"size": 11, "color": "#ccc", "strokeWidth": 0},
         )
 
-    # Hierarchical, left-to-right layout: since this graph represents a
-    # directed BFS trace of fund movement (source -> later hops), laying
-    # it out by edge direction reads naturally left-to-right like a
-    # money-flow diagram, instead of the previous force-directed "hairball"
-    # where hop order and flow direction were impossible to follow visually.
+   
     net.set_options("""
     {
       "layout": {
@@ -319,13 +458,7 @@ def render_graph(G, tags=None, start_address=None, output_file="graph.html"):
         }
       },
       "physics": {
-        "enabled": true,
-        "hierarchicalRepulsion": {
-          "nodeDistance": 220,
-          "springLength": 220,
-          "avoidOverlap": 0.6
-        },
-        "solver": "hierarchicalRepulsion"
+        "enabled": false
       },
       "edges": {
         "smooth": {
@@ -344,6 +477,8 @@ def render_graph(G, tags=None, start_address=None, output_file="graph.html"):
     """)
 
     net.show(output_file, notebook=False)
-    _inject_legend(output_file)
+
+    stats = _compute_stats(G, edges_agg)
+    _inject_overlays(output_file, stats)
 
     return output_file

@@ -1,4 +1,5 @@
 import os
+import glob
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
@@ -21,9 +22,10 @@ from db import (
     get_trace_by_id,
 )
 from report_generator import generate_pdf_report
+from evidence import save_evidence, verify_evidence, compute_hash
 from alert_engine import raise_alert
 from dashboard import generate_dashboard_html, get_trace_detail
-from config import DEFAULT_CHAIN_ID
+from config import DEFAULT_CHAIN_ID, GRAPHS_DIR, EVIDENCE_DIR
 
 load_dotenv()
 API_KEY = os.getenv("ETHERSCAN_KEY")
@@ -37,6 +39,8 @@ app = FastAPI(
 def on_startup():
     try:
         init_db()
+        os.makedirs(GRAPHS_DIR, exist_ok=True)
+        os.makedirs(EVIDENCE_DIR, exist_ok=True)
         print("[DB] Database initialized successfully.")
     except Exception as exc:
         print(f"[DB] Database initialization failed: {exc}")
@@ -51,6 +55,10 @@ def _edge_amount(e):
     return float(e["value"]) / (10 ** decimals)
 
 
+def _graph_path_for(trace_id):
+    return os.path.join(GRAPHS_DIR, f"graph_{trace_id}.html")
+
+
 @app.get("/")
 def root():
     return {
@@ -58,9 +66,10 @@ def root():
         "database": "Neon PostgreSQL",
         "endpoints": {
             "dashboard": "/dashboard",
-            "graph": "/graph",
+            "graph": "/graph/{trace_id}",
             "traces": "/traces",
             "alerts": "/alerts",
+            "evidence": "/evidence/{trace_id}",
             "docs": "/docs",
         },
     }
@@ -77,6 +86,9 @@ def trace(
             status_code=500,
             detail="ETHERSCAN_KEY not set in .env",
         )
+
+    
+    address = address.lower()
 
     edges, incoming_timestamps = trace_wallet(
         address,
@@ -140,11 +152,12 @@ def trace(
             "report_path": report_path,
             "report_url": f"/report/{trace_id}",
             "graph_url": None,
+            "evidence_url": None,
             "alert_raised": None,
         }
 
     G = build_graph(edges)
-    tags = tag_all(G.nodes)
+    tags = tag_all(G.nodes, edges=edges, api_key=API_KEY, chain_id=chain_id)
     cross_chain_findings = {}
 
     if check_cross_chain:
@@ -176,13 +189,6 @@ def trace(
         cross_chain_findings,
     )
 
-    graph_path = render_graph(
-        G,
-        tags=tags,
-        start_address=address,
-        output_file="graph.html",
-    )
-
     serialized_edges = []
 
     for e in edges:
@@ -201,8 +207,18 @@ def trace(
                     "is_spoofed_token",
                     False,
                 ),
+                "function_name": e.get("function_name"),
             }
         )
+
+    
+    raw_records = [e["_raw"] for e in edges if e.get("_raw")]
+    evidence_core = {
+        "address": address,
+        "raw_records": raw_records,
+        "derived_edges": serialized_edges,
+    }
+    evidence_hash = compute_hash(evidence_core)
 
     trace_id = save_trace(
         address,
@@ -210,14 +226,34 @@ def trace(
         summary,
         serialized_edges,
         risk,
+        evidence_hash=evidence_hash,
     )
 
     print(f"[DB] Trace saved successfully. trace_id={trace_id}")
+
+    evidence_path, _ = save_evidence(
+        trace_id,
+        address,
+        raw_records,
+        serialized_edges,
+        precomputed_hash=evidence_hash,
+    )
+
+    print(f"[EVIDENCE] Bundle saved: {evidence_path}")
+
+   
+    graph_path = render_graph(
+        G,
+        tags=tags,
+        start_address=address,
+        output_file=_graph_path_for(trace_id),
+    )
 
     report_path = generate_pdf_report(
         summary,
         risk,
         trace_id=trace_id,
+        evidence={"hash": evidence_hash, "path": evidence_path},
     )
 
     print(f"[REPORT] PDF generated: {report_path}")
@@ -258,7 +294,8 @@ def trace(
         "report_path": report_path,
 
         "report_url": f"/report/{trace_id}",
-        "graph_url": "/graph",
+        "graph_url": f"/graph/{trace_id}",
+        "evidence_url": f"/evidence/{trace_id}",
 
         "alert_raised": alert_message,
     }
@@ -266,6 +303,7 @@ def trace(
 
 @app.post("/ingest-complaint")
 def ingest_complaint(address: str):
+    address = address.lower()
     print(
         f"[MOCK] Complaint received for wallet: {address}"
     )
@@ -308,36 +346,86 @@ def dashboard_trace(trace_id: int):
 
 
 @app.get(
-    "/graph",
+    "/graph/{trace_id}",
     response_class=HTMLResponse,
 )
-def graph():
-    graph_path = "graph.html"
+def graph_for_trace(trace_id: int):
+    graph_path = _graph_path_for(trace_id)
 
     if not os.path.exists(graph_path):
         raise HTTPException(
             status_code=404,
-            detail="No graph has been generated yet. Run /trace first.",
+            detail=f"No graph stored for trace {trace_id}.",
         )
 
     try:
-        with open(
-            graph_path,
-            "r",
-            encoding="utf-8",
-        ) as f:
+        with open(graph_path, "r", encoding="utf-8") as f:
             html = f.read()
-
     except OSError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"Unable to read graph: {exc}",
         )
 
-    return HTMLResponse(
-        content=html,
-        status_code=200,
+    return HTMLResponse(content=html, status_code=200)
+
+
+@app.get(
+    "/graph",
+    response_class=HTMLResponse,
+)
+def graph_latest():
+    """Backward-compatible alias: serves the most recently generated graph."""
+    candidates = glob.glob(os.path.join(GRAPHS_DIR, "graph_*.html"))
+
+    if not candidates:
+        raise HTTPException(
+            status_code=404,
+            detail="No graph has been generated yet. Run /trace first.",
+        )
+
+    latest = max(candidates, key=os.path.getmtime)
+
+    try:
+        with open(latest, "r", encoding="utf-8") as f:
+            html = f.read()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to read graph: {exc}",
+        )
+
+    return HTMLResponse(content=html, status_code=200)
+
+
+@app.get("/evidence/{trace_id}")
+def get_evidence(trace_id: int):
+    path = os.path.join(EVIDENCE_DIR, f"evidence_{trace_id}.json")
+
+    if not os.path.exists(path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No evidence bundle found for trace {trace_id}.",
+        )
+
+    return FileResponse(
+        path=path,
+        media_type="application/json",
+        filename=os.path.basename(path),
     )
+
+
+@app.get("/evidence/{trace_id}/verify")
+def verify_evidence_endpoint(trace_id: int):
+    result = verify_evidence(trace_id)
+
+    if not result["exists"]:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No evidence bundle found for trace {trace_id}.",
+        )
+
+    return result
 
 
 @app.get("/traces")
@@ -395,10 +483,19 @@ def view_report(trace_id: int):
         ),
     }
 
+    evidence = None
+    if trace_row.get("evidence_hash"):
+        evidence_path = os.path.join(EVIDENCE_DIR, f"evidence_{trace_id}.json")
+        evidence = {
+            "hash": trace_row["evidence_hash"],
+            "path": evidence_path if os.path.exists(evidence_path) else "N/A",
+        }
+
     path = generate_pdf_report(
         summary,
         risk,
         trace_id=trace_id,
+        evidence=evidence,
     )
 
     if not os.path.exists(path):

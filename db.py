@@ -74,6 +74,15 @@ def init_db():
                 )
             """)
 
+            # --- Migrations for existing databases -------------------------
+            # ADD COLUMN IF NOT EXISTS is safe to re-run and never touches
+            # existing rows/columns, so this won't break a DB you already
+            # have data in.
+            cur.execute("""
+                ALTER TABLE traces
+                ADD COLUMN IF NOT EXISTS evidence_hash TEXT
+            """)
+
             _reset_sequence_if_empty(
                 cur,
                 "traces",
@@ -98,7 +107,7 @@ def init_db():
             cur.close()
 
 
-def save_trace(address, chain_id, summary, edges, risk):
+def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None):
     with get_connection() as conn:
         cur = conn.cursor()
 
@@ -112,9 +121,10 @@ def save_trace(address, chain_id, summary, edges, risk):
                     risk_score,
                     risk_level,
                     summary_json,
-                    edges_json
+                    edges_json,
+                    evidence_hash
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -125,6 +135,7 @@ def save_trace(address, chain_id, summary, edges, risk):
                     risk.get("level", "Low"),
                     psycopg2.extras.Json(summary),
                     psycopg2.extras.Json(edges),
+                    evidence_hash,
                 ),
             )
 
