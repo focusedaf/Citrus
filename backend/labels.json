@@ -1,0 +1,12 @@
+{
+  "vasp": {
+    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "Example Exchange Hot Wallet"
+  },
+  "bridge": {
+    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "Example Bridge Contract"
+  },
+  "mixer": {},
+  "contract": {
+    "0xcccccccccccccccccccccccccccccccccccccccc": "Example Infra Contract"
+  }
+}
