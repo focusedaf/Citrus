@@ -1,204 +1,158 @@
-"use client"
+"use client";
 
-import * as React from "react"
-
-import { NavDocuments } from "@/components/nav-documents"
-import { NavMain } from "@/components/nav-main"
-import { NavSecondary } from "@/components/nav-secondary"
-import { NavUser } from "@/components/nav-user"
+import * as React from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { NavUser } from "@/components/nav-user";
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@/components/ui/sidebar"
-import { LayoutDashboardIcon, ListIcon, ChartBarIcon, FolderIcon, UsersIcon, CameraIcon, FileTextIcon, Settings2Icon, CircleHelpIcon, SearchIcon, DatabaseIcon, FileChartColumnIcon, FileIcon, CommandIcon } from "lucide-react"
+} from "@/components/ui/sidebar";
+import { useStore } from "@/lib/store";
+import {
+  BellRingIcon,
+  CircleHelpIcon,
+  FileChartColumnIcon,
+  FolderKanbanIcon,
+  LayoutDashboardIcon,
+  RadarIcon,
+  Settings2Icon,
+  SearchCheckIcon,
+} from "lucide-react";
 
-const data = {
-  user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
-  },
-  navMain: [
+export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+  const path = usePathname();
+  const { state } = useStore();
+  const openAlerts = state.alerts.filter((a) => !a.acknowledged).length;
+  const activeCases = state.workspaces.filter(
+    (w) => w.status !== "Closed",
+  ).length;
+
+  const main = [
+    { title: "Dashboard", url: "/dashboard", icon: LayoutDashboardIcon },
     {
-      title: "Dashboard",
-      url: "#",
-      icon: (
-        <LayoutDashboardIcon
-        />
-      ),
+      title: "Workspaces",
+      url: "/workspaces",
+      icon: FolderKanbanIcon,
+      badge: activeCases,
     },
-    {
-      title: "Lifecycle",
-      url: "#",
-      icon: (
-        <ListIcon
-        />
-      ),
-    },
-    {
-      title: "Analytics",
-      url: "#",
-      icon: (
-        <ChartBarIcon
-        />
-      ),
-    },
-    {
-      title: "Projects",
-      url: "#",
-      icon: (
-        <FolderIcon
-        />
-      ),
-    },
-    {
-      title: "Team",
-      url: "#",
-      icon: (
-        <UsersIcon
-        />
-      ),
-    },
-  ],
-  navClouds: [
-    {
-      title: "Capture",
-      icon: (
-        <CameraIcon
-        />
-      ),
-      isActive: true,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Proposal",
-      icon: (
-        <FileTextIcon
-        />
-      ),
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Prompts",
-      icon: (
-        <FileTextIcon
-        />
-      ),
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-  ],
-  navSecondary: [
-    {
-      title: "Settings",
-      url: "#",
-      icon: (
-        <Settings2Icon
-        />
-      ),
-    },
-    {
-      title: "Get Help",
-      url: "#",
-      icon: (
-        <CircleHelpIcon
-        />
-      ),
-    },
-    {
-      title: "Search",
-      url: "#",
-      icon: (
-        <SearchIcon
-        />
-      ),
-    },
-  ],
-  documents: [
-    {
-      name: "Data Library",
-      url: "#",
-      icon: (
-        <DatabaseIcon
-        />
-      ),
-    },
-    {
-      name: "Reports",
-      url: "#",
-      icon: (
-        <FileChartColumnIcon
-        />
-      ),
-    },
-    {
-      name: "Word Assistant",
-      url: "#",
-      icon: (
-        <FileIcon
-        />
-      ),
-    },
-  ],
-}
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+    { title: "Alerts", url: "/alerts", icon: BellRingIcon, badge: openAlerts },
+    { title: "Reports", url: "/reports", icon: FileChartColumnIcon },
+  ];
+  const isActive = (u: string) => path === u || path.startsWith(u + "/");
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              className="data-[slot=sidebar-menu-button]:p-1.5!"
-              render={<a href="#" />}
-            >
-              <CommandIcon className="size-5!" />
-              <span className="text-base font-semibold">Acme Inc.</span>
+            <SidebarMenuButton size="lg" render={<Link href="/dashboard" />}>
+              <div className="flex size-8 items-center justify-center rounded-lg bg-amber-400 text-lg text-black">
+                🍋
+              </div>
+              <div className="grid flex-1 text-left leading-tight">
+                <span className="text-base font-semibold">Citrus</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Crypto Fraud Attribution
+                </span>
+              </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={data.navMain} />
-        <NavDocuments items={data.documents} />
-        <NavSecondary items={data.navSecondary} className="mt-auto" />
+        <SidebarGroup>
+          <SidebarGroupContent className="flex flex-col gap-2">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="New investigation"
+                  render={<Link href="/trace" />}
+                  className="min-w-8 bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                >
+                  <RadarIcon />
+                  <span>New Investigation</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+            <SidebarMenu>
+              {main.map((it) => (
+                <SidebarMenuItem key={it.title}>
+                  <SidebarMenuButton
+                    tooltip={it.title}
+                    isActive={isActive(it.url)}
+                    render={<Link href={it.url} />}
+                  >
+                    <it.icon />
+                    <span>{it.title}</span>
+                  </SidebarMenuButton>
+                  {!!it.badge && (
+                    <SidebarMenuBadge>{it.badge}</SidebarMenuBadge>
+                  )}
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Recent workspaces</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {state.workspaces.slice(0, 4).map((w) => (
+                <SidebarMenuItem key={w.id}>
+                  <SidebarMenuButton
+                    isActive={path === `/workspaces/${w.id}`}
+                    render={<Link href={`/workspaces/${w.id}`} />}
+                  >
+                    <SearchCheckIcon />
+                    <span className="truncate">
+                      {w.id} · {w.title.split("–")[0].trim()}
+                    </span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup className="mt-auto">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton render={<Link href="/settings" />}>
+                  <Settings2Icon />
+                  <span>Settings</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton render={<Link href="/settings" />}>
+                  <CircleHelpIcon />
+                  <span>Help</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser
+          user={{
+            name: "Insp. Aarav Mehta",
+            email: "aarav.mehta@cybercell.gov.in",
+            avatar: "",
+          }}
+        />
       </SidebarFooter>
     </Sidebar>
-  )
+  );
 }
