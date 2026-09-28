@@ -2,7 +2,7 @@ import { DEMO_NOW, ME, MEMBERS, WORKSPACES } from "./mock-data"
 import { levelFromScore } from "./format"
 import type { Alert, EntityType, GraphEdge, GraphNode, Workspace } from "./types"
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api"
 
 /** Shape of POST /trace in backend/main.py */
 interface TraceResponse {
