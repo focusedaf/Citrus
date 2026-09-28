@@ -2,6 +2,8 @@ import os
 import glob
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, FileResponse
 from tracer import trace_wallet, cross_chain_reuse_check
 from graph_utils import (
@@ -26,13 +28,59 @@ from evidence import save_evidence, verify_evidence, compute_hash
 from alert_engine import raise_alert
 from dashboard import generate_dashboard_html, get_trace_detail
 from config import DEFAULT_CHAIN_ID, GRAPHS_DIR, EVIDENCE_DIR
+from workspace_service import (
+    MEMBERS, ensure_workspace, get_workspace, list_workspaces, update_status,
+    add_comment, add_task, toggle_task, invite_member, acknowledge_alert,
+    toggle_node_flag, add_node_note, VALID_STATUSES,
+)
 
 load_dotenv()
 API_KEY = os.getenv("ETHERSCAN_KEY")
 app = FastAPI(
     title="CITRUS",
-    version="1.0.0",
+    version="1.1.0",
+    description="Real-time crypto fraud attribution and investigation workspace API.",
 )
+
+# Frontend runs separately during development/deployment.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        os.getenv("FRONTEND_ORIGIN", "http://localhost:3000"),
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class CommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+    actor: str = "m1"
+
+class StatusIn(BaseModel):
+    status: str
+    actor: str = "m1"
+
+class TaskIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+    assignee: str = "m1"
+    actor: str = "m1"
+
+class InviteIn(BaseModel):
+    member_id: str
+    actor: str = "m1"
+
+class NodeNoteIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+    actor: str = "m1"
+
+class TraceOptions(BaseModel):
+    address: str
+    chain_id: int = DEFAULT_CHAIN_ID
+    max_hops: int = 3
+    check_cross_chain: bool = True
 
 
 @app.on_event("startup")
@@ -132,6 +180,7 @@ def trace(
             empty_summary,
             [],
             empty_risk,
+            tags={},
         )
 
         report_path = generate_pdf_report(
@@ -142,8 +191,9 @@ def trace(
 
         return {
             "trace_id": trace_id,
+            "workspace_id": ensure_workspace(trace_id, address, chain="Ethereum"),
             "address": address,
-            "message": "No outgoing transactions found (or address is inactive).",
+            "message": "No transactions found (or address is inactive).",
             "edges": [],
             "tags": {},
             "investigation_table": [],
@@ -227,6 +277,7 @@ def trace(
         serialized_edges,
         risk,
         evidence_hash=evidence_hash,
+        tags=tags,
     )
 
     print(f"[DB] Trace saved successfully. trace_id={trace_id}")
@@ -277,8 +328,16 @@ def trace(
             f"[DB] Alert saved successfully for trace_id={trace_id}"
         )
 
+    workspace_id = ensure_workspace(
+        trace_id,
+        address,
+        chain="Ethereum",
+        complaint_id=f"NCRP/2026/LIVE/{trace_id:06d}",
+    )
+
     return {
         "trace_id": trace_id,
+        "workspace_id": workspace_id,
         "address": address,
 
         "edges": serialized_edges,
@@ -317,6 +376,134 @@ def ingest_complaint(address: str):
     )
 
     return result
+
+
+
+@app.get("/members")
+def members():
+    return MEMBERS
+
+
+@app.get("/workspaces")
+def workspaces(limit: int = 100):
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return list_workspaces(limit)
+
+
+@app.get("/workspaces/{workspace_id}")
+def workspace(workspace_id: str):
+    result = get_workspace(workspace_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return result
+
+
+@app.patch("/workspaces/{workspace_id}/status")
+def workspace_status(workspace_id: str, payload: StatusIn):
+    try:
+        ok = update_status(workspace_id, payload.status, payload.actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return get_workspace(workspace_id)
+
+
+@app.post("/workspaces/{workspace_id}/comments")
+def workspace_comment(workspace_id: str, payload: CommentIn):
+    if not get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return {"id": add_comment(workspace_id, payload.text.strip(), payload.actor), **get_workspace(workspace_id)}
+
+
+@app.post("/workspaces/{workspace_id}/tasks")
+def workspace_task(workspace_id: str, payload: TaskIn):
+    if not get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    task_id = add_task(workspace_id, payload.text.strip(), payload.assignee, payload.actor)
+    return {"task_id": task_id, **get_workspace(workspace_id)}
+
+
+@app.patch("/workspaces/{workspace_id}/tasks/{task_id}")
+def workspace_task_toggle(workspace_id: str, task_id: str, actor: str = "m1"):
+    result = toggle_task(workspace_id, task_id, actor)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return get_workspace(workspace_id)
+
+
+@app.post("/workspaces/{workspace_id}/members")
+def workspace_invite(workspace_id: str, payload: InviteIn):
+    if not get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    try:
+        invite_member(workspace_id, payload.member_id, payload.actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return get_workspace(workspace_id)
+
+
+@app.patch("/alerts/{alert_id}/ack")
+def alert_ack(alert_id: str):
+    if not acknowledge_alert(alert_id):
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"ok": True, "alert_id": alert_id}
+
+
+@app.post("/workspaces/{workspace_id}/nodes/{address}/flag")
+def node_flag(workspace_id: str, address: str, actor: str = "m1"):
+    if not get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    flagged = toggle_node_flag(workspace_id, address.lower(), actor)
+    return {"flagged": flagged, "workspace": get_workspace(workspace_id)}
+
+
+@app.post("/workspaces/{workspace_id}/nodes/{address}/notes")
+def node_note(workspace_id: str, address: str, payload: NodeNoteIn):
+    if not get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    add_node_note(workspace_id, address.lower(), payload.text.strip(), payload.actor)
+    return get_workspace(workspace_id)
+
+
+@app.post("/workspaces/{workspace_id}/report")
+def workspace_report(workspace_id: str):
+    ws = get_workspace(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    trace_id = ws["traceId"]
+    # /report/{trace_id} is the canonical PDF generator/download endpoint.
+    return {"trace_id": trace_id, "report_url": f"/report/{trace_id}"}
+
+
+@app.get("/dashboard/stats")
+def dashboard_stats(days: int = 30):
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    traces = get_all_traces(500)
+    alerts = get_all_alerts(500)
+    active = [t for t in traces if t.get("risk_level") and t.get("risk_level") != "Low"]
+    vasp_hits = {}
+    entity_counts = {"vasp": 0, "mixer": 0, "bridge": 0, "contract": 0, "unknown": 0}
+    for t in traces:
+        tags = t.get("tags_json") or {}
+        for tag in tags.values():
+            typ = (tag or {}).get("entity_type", "unknown")
+            entity_counts[typ] = entity_counts.get(typ, 0) + 1
+            if typ == "vasp":
+                label = (tag or {}).get("label", "Unknown VASP")
+                vasp_hits[label] = vasp_hits.get(label, 0) + 1
+    return {
+        "active_cases": len(active),
+        "total_workspaces": len(traces),
+        "critical_cases": sum(1 for t in traces if t.get("risk_level") == "Critical"),
+        "funds_traced_inr": 0,
+        "vasps_identified": len(vasp_hits),
+        "open_alerts": sum(1 for a in alerts if not a.get("acknowledged", False)),
+        "entity_counts": entity_counts,
+        "top_exchanges": sorted(({"name": k, "hits": v} for k, v in vasp_hits.items()), key=lambda x: x["hits"], reverse=True)[:6],
+    }
 
 
 @app.get(
@@ -438,6 +625,27 @@ def list_traces(limit: int = 50):
         )
 
     return get_all_traces(limit)
+
+
+@app.get("/reports")
+def list_reports(limit: int = 100):
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    rows = get_all_traces(limit)
+    reports = []
+    for row in rows:
+        reports.append({
+            "id": f"r-{row['id']}",
+            "name": f"Investigation report – trace {row['id']}.pdf",
+            "at": row["created_at"],
+            "by": "m1",
+            "kind": "PDF",
+            "workspaceId": f"CT-{1000 + row['id']}",
+            "traceId": row["id"],
+            "reportUrl": f"/report/{row['id']}",
+            "evidenceUrl": f"/evidence/{row['id']}",
+        })
+    return reports
 
 
 @app.get("/alerts")

@@ -83,6 +83,69 @@ def init_db():
                 ADD COLUMN IF NOT EXISTS evidence_hash TEXT
             """)
 
+            cur.execute("ALTER TABLE traces ADD COLUMN IF NOT EXISTS tags_json JSONB")
+            cur.execute("ALTER TABLE alerts ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT FALSE")
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id TEXT PRIMARY KEY,
+                    trace_id INTEGER NOT NULL UNIQUE REFERENCES traces(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    complaint_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    victim_state TEXT NOT NULL DEFAULT '—',
+                    chain TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'New',
+                    amount_inr NUMERIC NOT NULL DEFAULT 0,
+                    created_at BIGINT NOT NULL,
+                    lead TEXT NOT NULL DEFAULT 'm1'
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_members (
+                    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+                    member_id TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, member_id)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_comments (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+                    by_member TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    at BIGINT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_tasks (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+                    text TEXT NOT NULL,
+                    assignee TEXT NOT NULL,
+                    done BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at BIGINT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_activity (
+                    id BIGSERIAL PRIMARY KEY,
+                    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+                    by_member TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    at BIGINT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_nodes (
+                    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+                    address TEXT NOT NULL,
+                    flagged BOOLEAN NOT NULL DEFAULT FALSE,
+                    notes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    PRIMARY KEY (workspace_id, address)
+                )
+            """)
+
             _reset_sequence_if_empty(
                 cur,
                 "traces",
@@ -107,7 +170,7 @@ def init_db():
             cur.close()
 
 
-def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None):
+def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None, tags=None):
     with get_connection() as conn:
         cur = conn.cursor()
 
@@ -122,9 +185,10 @@ def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None):
                     risk_level,
                     summary_json,
                     edges_json,
-                    evidence_hash
+                    evidence_hash,
+                    tags_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -136,6 +200,7 @@ def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None):
                     psycopg2.extras.Json(summary),
                     psycopg2.extras.Json(edges),
                     evidence_hash,
+                    psycopg2.extras.Json(tags or {}),
                 ),
             )
 
