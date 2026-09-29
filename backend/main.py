@@ -350,7 +350,10 @@ def trace(
             summary=summary,
             risk=risk,
             trace_id=trace_id,
-            evidence=evidence,
+            evidence={
+            "filename": f"evidence_{trace_id}.json",
+            "hash": evidence_hash,
+            },
         )
 
         report_blob_url = upload_report(

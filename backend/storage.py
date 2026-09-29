@@ -118,14 +118,17 @@ def upload_graph(
         content_type="text/html",
     )
 
-
 def upload_report(
     trace_id: int,
-    report_path: str,
+    report_pdf,
 ) -> str:
-    """Upload a generated PDF investigation report."""
-    return upload_file(
-        local_path=report_path,
+    """Upload generated PDF bytes directly to Vercel Blob."""
+
+    if isinstance(report_pdf, str):
+        report_pdf = report_pdf.encode("latin-1")
+
+    return upload_bytes(
+        data=report_pdf,
         blob_path=f"citrus/reports/report_{trace_id}.pdf",
         content_type="application/pdf",
     )
