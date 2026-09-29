@@ -10,3 +10,4 @@ pydantic==2.13.5
 Jinja2==3.1.6
 jsonpickle==4.1.2
 matplotlib-inline==0.2.2
+vercel

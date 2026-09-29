@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, Response
 from tracer import trace_wallet, cross_chain_reuse_check
 from graph_utils import (
     build_graph,
@@ -26,6 +26,7 @@ from db import (
 )
 from report_generator import generate_pdf_report
 from evidence import save_evidence, verify_evidence, compute_hash
+from storage import upload_evidence, upload_graph, upload_report, get_blob
 from alert_engine import raise_alert
 from dashboard import generate_dashboard_html, get_trace_detail
 from config import DEFAULT_CHAIN_ID, GRAPHS_DIR, EVIDENCE_DIR
@@ -306,6 +307,18 @@ def trace(
 
     print(f"[EVIDENCE] Bundle saved: {evidence_path}")
 
+    evidence_blob_url = upload_evidence(
+    trace_id,
+    {
+        "address": address,
+        "raw_records": raw_records,
+        "derived_edges": serialized_edges,
+        "evidence_hash": evidence_hash,
+    },
+    )
+
+    print(f"[EVIDENCE] Uploaded to Blob: {evidence_blob_url}")
+
    
     graph_path = render_graph(
         G,
@@ -313,6 +326,13 @@ def trace(
         start_address=address,
         output_file=_graph_path_for(trace_id),
     )
+
+    graph_blob_url = upload_graph(
+    trace_id,
+    graph_path,
+    )
+
+    print(f"[GRAPH] Uploaded to Blob: {graph_blob_url}")
 
     report_path = generate_pdf_report(
         summary,
@@ -322,6 +342,13 @@ def trace(
     )
 
     print(f"[REPORT] PDF generated: {report_path}")
+
+    report_blob_url = upload_report(
+    trace_id,
+    report_path,
+    )
+
+    print(f"[REPORT] Uploaded to Blob: {report_blob_url}")
 
     alert_message = raise_alert(
         address,
@@ -369,6 +396,12 @@ def trace(
         "report_url": f"/report/{trace_id}",
         "graph_url": f"/graph/{trace_id}",
         "evidence_url": f"/evidence/{trace_id}",
+
+        "blob_artifacts": {
+        "report": report_blob_url,
+        "graph": graph_blob_url,
+        "evidence": evidence_blob_url,
+        },
 
         "alert_raised": alert_message,
     }
@@ -546,30 +579,22 @@ def dashboard_trace(trace_id: int):
     )
 
 
-@app.get(
-    "/graph/{trace_id}",
-    response_class=HTMLResponse,
-)
-def graph_for_trace(trace_id: int):
-    graph_path = _graph_path_for(trace_id)
+@app.get("/graph/{trace_id}", response_class=HTMLResponse)
+async def graph_for_trace(trace_id: int):
+    blob_path = f"citrus/graphs/graph_{trace_id}.html"
 
-    if not os.path.exists(graph_path):
+    result = await get_blob(blob_path)
+
+    if result is None or result.status_code != 200:
         raise HTTPException(
             status_code=404,
             detail=f"No graph stored for trace {trace_id}.",
         )
 
-    try:
-        with open(graph_path, "r", encoding="utf-8") as f:
-            html = f.read()
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unable to read graph: {exc}",
-        )
-
-    return HTMLResponse(content=html, status_code=200)
-
+    return HTMLResponse(
+        content=result.content.decode("utf-8"),
+        status_code=200,
+    )
 
 @app.get(
     "/graph",
@@ -598,21 +623,24 @@ def graph_latest():
 
     return HTMLResponse(content=html, status_code=200)
 
-
 @app.get("/evidence/{trace_id}")
-def get_evidence(trace_id: int):
-    path = os.path.join(EVIDENCE_DIR, f"evidence_{trace_id}.json")
+async def get_evidence(trace_id: int):
+    blob_path = f"citrus/evidence/evidence_{trace_id}.json"
 
-    if not os.path.exists(path):
+    result = await get_blob(blob_path)
+
+    if result is None or result.status_code != 200:
         raise HTTPException(
             status_code=404,
             detail=f"No evidence bundle found for trace {trace_id}.",
         )
 
-    return FileResponse(
-        path=path,
-        media_type="application/json",
-        filename=os.path.basename(path),
+    return Response(
+        content=result.content,
+        media_type=result.content_type or "application/json",
+        headers={
+            "Content-Disposition": f'inline; filename="evidence_{trace_id}.json"'
+        },
     )
 
 
@@ -673,66 +701,22 @@ def list_alerts(limit: int = 50):
 
     return get_all_alerts(limit)
 
-
 @app.get("/report/{trace_id}")
-def view_report(trace_id: int):
+async def view_report(trace_id: int):
+    blob_path = f"citrus/reports/report_{trace_id}.pdf"
 
-    trace_row = get_trace_by_id(
-        trace_id
-    )
+    result = await get_blob(blob_path)
 
-    if not trace_row:
+    if result is None or result.status_code != 200:
         raise HTTPException(
             status_code=404,
-            detail="Trace not found",
+            detail=f"No report found for trace {trace_id}.",
         )
 
-    summary = trace_row["summary_json"]
-
-    if not summary:
-        raise HTTPException(
-            status_code=500,
-            detail="Trace exists but contains no report summary.",
-        )
-
-    risk = {
-        "score": trace_row["risk_score"],
-        "level": trace_row["risk_level"],
-        "label": "Rule-Based Risk Indicator (Prototype)",
-        "reasons": summary.get(
-            "risk_indicators",
-            [],
-        ),
-    }
-
-    evidence = None
-    if trace_row.get("evidence_hash"):
-        evidence_path = os.path.join(EVIDENCE_DIR, f"evidence_{trace_id}.json")
-        evidence = {
-            "hash": trace_row["evidence_hash"],
-            "path": evidence_path if os.path.exists(evidence_path) else "N/A",
-        }
-
-    path = generate_pdf_report(
-        summary,
-        risk,
-        trace_id=trace_id,
-        evidence=evidence,
-    )
-
-    if not os.path.exists(path):
-        raise HTTPException(
-            status_code=500,
-            detail="PDF report could not be generated.",
-        )
-
-    return FileResponse(
-        path=path,
-        media_type="application/pdf",
-        filename=os.path.basename(path),
+    return Response(
+        content=result.content,
+        media_type=result.content_type or "application/pdf",
         headers={
-            "Content-Disposition": (
-                f'inline; filename="{os.path.basename(path)}"'
-            )
+            "Content-Disposition": f'inline; filename="report_{trace_id}.pdf"'
         },
     )
