@@ -87,8 +87,8 @@ class TraceOptions(BaseModel):
 def on_startup():
     try:
         init_db()
-        os.makedirs(GRAPHS_DIR, exist_ok=True)
-        os.makedirs(EVIDENCE_DIR, exist_ok=True)
+        # os.makedirs(GRAPHS_DIR, exist_ok=True)
+        # os.makedirs(EVIDENCE_DIR, exist_ok=True)
         print("[DB] Database initialized successfully.")
     except Exception as exc:
         print(f"[DB] Database initialization failed: {exc}")
