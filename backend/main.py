@@ -253,7 +253,7 @@ def trace(
                 "cross_chain": [],
             }
 
-        G = build_graph(edges)
+        G = build_graph(edges, start_address=address)
 
         tags = tag_all(
             address,
@@ -277,7 +277,11 @@ def trace(
             max_hops=max_hops,
         )
 
-        table = investigation_table(G)
+        table = investigation_table(
+            G,
+            tags=tags,
+            start_address=address,
+        )
 
         summary = investigation_summary(
             G,
