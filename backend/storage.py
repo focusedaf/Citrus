@@ -53,7 +53,7 @@ def upload_bytes(data: bytes, blob_path: str, content_type: str) -> str:
     print(f"[BLOB UPLOAD] URL: {result.url}")
 
     return result.url
-    
+
 def upload_file(
     local_path: str,
     blob_path: str,
@@ -73,25 +73,22 @@ def upload_file(
         content_type=content_type,
     )
 
+def upload_json(data: Any, blob_path: str) -> str:
+    print(f"[BLOB JSON] Starting serialization: {blob_path}")
 
-def upload_json(
-    data: Any,
-    blob_path: str,
-) -> str:
-    """
-    Convert Python data to JSON and upload it to Vercel Blob.
-    """
     payload = json.dumps(
         data,
         indent=2,
         ensure_ascii=False,
-        default=str,
+        default=str
     ).encode("utf-8")
+
+    print(f"[BLOB JSON] Serialization complete: {len(payload)} bytes")
 
     return upload_bytes(
         data=payload,
         blob_path=blob_path,
-        content_type="application/json",
+        content_type="application/json"
     )
 
 
