@@ -41,6 +41,7 @@ app = FastAPI(
     title="CITRUS",
     version="1.1.0",
     description="Real-time crypto fraud attribution and investigation workspace API.",
+    root_path="/api",
 )
 
 class StripAPIPrefixMiddleware(BaseHTTPMiddleware):
