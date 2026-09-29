@@ -49,6 +49,7 @@ load_dotenv()
 
 API_KEY = os.getenv("ETHERSCAN_KEY")
 
+
 app = FastAPI(
     title="CITRUS",
     version="1.1.0",
@@ -57,23 +58,21 @@ app = FastAPI(
 )
 
 
-class StripAPIPrefixMiddleware(BaseHTTPMiddleware):
+class StripApiPrefixMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.scope["path"] == "/api":
-            request.scope["path"] = "/"
-        elif request.scope["path"].startswith("/api/"):
-            request.scope["path"] = request.scope["path"][4:]
-
+        if request.url.path.startswith("/api"):
+            request.scope["path"] = request.url.path[4:] or "/"
         return await call_next(request)
 
 
-app.add_middleware(StripAPIPrefixMiddleware)
+app.add_middleware(StripApiPrefixMiddleware)
+
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        os.getenv("FRONTEND_ORIGIN", "http://localhost:3000"),
-        "http://127.0.0.1:3000",
+        "https://citrus-seven-livid.vercel.app",
+        "http://localhost:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -115,38 +114,44 @@ class TraceOptions(BaseModel):
 
 
 @app.on_event("startup")
-def on_startup():
+def startup():
+    init_db()
+
+
+def _edge_amount(edge):
+    if edge.get("token") == "ETH":
+        return float(edge.get("value", 0)) / 1e18
+
+    decimals = edge.get("value_decimals", 18)
+
     try:
-        init_db()
-        print("[DB] Database initialized successfully.")
-    except Exception as exc:
-        print(f"[DB] Database initialization failed: {exc}")
-        raise
+        return float(edge.get("value", 0)) / (10 ** decimals)
+    except (TypeError, ValueError):
+        return 0.0
 
-
-def _edge_amount(e):
-    if e["token"] == "ETH":
-        return float(e["value"]) / 1e18
-
-    decimals = e.get("value_decimals", 18)
-
-    return float(e["value"]) / (10 ** decimals)
 
 def _chain_name(chain_id: int) -> str:
     return SUPPORTED_CHAINS.get(chain_id, f"Chain {chain_id}")
 
+
 @app.get("/")
 def root():
     return {
-        "message": "CITRUS",
+        "name": "CITRUS",
+        "version": "1.1.0",
+        "status": "running",
         "database": "Neon PostgreSQL",
         "endpoints": {
-            "dashboard": "/dashboard",
-            "graph": "/graph/{trace_id}",
-            "traces": "/traces",
-            "alerts": "/alerts",
-            "evidence": "/evidence/{trace_id}",
-            "docs": "/docs",
+            "trace": "/api/trace",
+            "complaint": "/api/ingest-complaint",
+            "dashboard": "/api/dashboard",
+            "traces": "/api/traces",
+            "alerts": "/api/alerts",
+            "graph": "/api/graph/{trace_id}",
+            "report": "/api/report/{trace_id}",
+            "evidence": "/api/evidence/{trace_id}",
+            "evidence_verify": "/api/evidence/{trace_id}/verify",
+            "workspaces": "/api/workspaces",
         },
     }
 
@@ -158,13 +163,38 @@ def trace(
     max_hops: int = 3,
     check_cross_chain: bool = True,
 ):
-    if not API_KEY:
+    address = address.lower().strip()
+
+    if not address:
         raise HTTPException(
-            status_code=500,
-            detail="ETHERSCAN_KEY not set in .env",
+            status_code=400,
+            detail="Wallet address is required.",
         )
 
-    address = address.lower()
+    if chain_id not in SUPPORTED_CHAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported chain_id: {chain_id}",
+        )
+
+    if max_hops < 1 or max_hops > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="max_hops must be between 1 and 10.",
+        )
+
+    if not any(
+        [
+            os.getenv("ETHERSCAN_KEY"),
+            os.getenv("ALCHEMY_API_KEY"),
+            os.getenv("GOLDRUSH_API_KEY"),
+            os.getenv("QUICKNODE_BSC_URL"),
+        ]
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="No blockchain data provider is configured.",
+        )
 
     edges, incoming_timestamps = trace_wallet(
         address,
@@ -174,145 +204,102 @@ def trace(
     )
 
     if not edges:
-        empty_risk = compute_risk(
-            [],
-            {},
-            address,
-        )
-
-        empty_summary = {
-            "reported_address": address,
-            "chain": "Ethereum",
-            "assets_observed": [],
-            "transactions_analyzed": 0,
-            "unique_counterparties": 0,
-            "max_trace_depth": 0,
-            "entity_findings": {
-                "vasp": "None detected",
-                "bridge": "None detected",
-                "mixer": "None detected",
-                "known_contracts": "None detected",
-                "unidentified_wallets": 0,
-            },
-            "spoofed_tokens_detected": "None detected",
-            "cross_chain_activity": "None detected",
-            "risk_indicators": [],
-            "risk_level": "Low",
-            "risk_score": 0,
+        risk = {
+            "score": 0,
+            "level": "Low",
+            "reasons": ["No outgoing transactions found."],
         }
 
         trace_id = save_trace(
-            address,
-            chain_id,
-            empty_summary,
-            [],
-            empty_risk,
-            tags={},
+            address=address,
+            chain_id=chain_id,
+            max_hops=max_hops,
+            risk=risk,
+            tags=[],
+            evidence_hash=None,
         )
 
-        report_bytes = generate_pdf_report(
-            empty_summary,
-            empty_risk,
+        ensure_workspace(
             trace_id=trace_id,
-        )
-
-        report_blob_url = upload_report(
-            trace_id,
-            report_bytes,
+            address=address,
+            chain_id=chain_id,
+            risk=risk,
         )
 
         return {
             "trace_id": trace_id,
-            "workspace_id": ensure_workspace(
-                trace_id,
-                address,
-                chain=_chain_name(chain_id),
-            ),
+            "workspace_id": f"CT-{trace_id}",
             "address": address,
-            "message": "No transactions found (or address is inactive).",
+            "chain_id": chain_id,
+            "chain": _chain_name(chain_id),
             "edges": [],
-            "tags": {},
-            "investigation_table": [],
-            "summary": empty_summary,
-            "risk": empty_risk,
-            "report_path": None,
-            "report_url": f"/report/{trace_id}",
-            "graph_url": None,
-            "evidence_url": None,
-            "blob_artifacts": {
-                "report": report_blob_url,
-                "graph": None,
-                "evidence": None,
+            "tags": [],
+            "table": [],
+            "summary": {
+                "chain": _chain_name(chain_id),
+                "address": address,
+                "nodes": 1,
+                "edges": 0,
             },
-            "alert_raised": None,
+            "risk": risk,
+            "cross_chain": [],
         }
 
     G = build_graph(edges)
 
     tags = tag_all(
-        G.nodes,
-        edges=edges,
-        api_key=API_KEY,
+        address,
+        edges,
         chain_id=chain_id,
     )
 
-    cross_chain_findings = {}
+    cross_chain = []
 
     if check_cross_chain:
-        cross_chain_findings = cross_chain_reuse_check(
+        cross_chain = cross_chain_reuse_check(
             address,
-            API_KEY,
-            primary_chain_id=chain_id,
+            current_chain_id=chain_id,
         )
 
     risk = compute_risk(
-        edges,
-        tags,
-        address,
-        incoming_timestamps,
-        cross_chain_findings,
+        address=address,
+        edges=edges,
+        tags=tags,
+        incoming_timestamps=incoming_timestamps,
+        cross_chain_results=cross_chain,
+        max_hops=max_hops,
     )
 
-    table = investigation_table(
-        G,
-        tags,
-    )
+    table = investigation_table(G)
 
     summary = investigation_summary(
         G,
-        tags,
-        edges,
-        address,
-        risk,
-        cross_chain_findings,
+        address=address,
+        chain_id=chain_id,
+        tags=tags,
+        risk=risk,
+        cross_chain=cross_chain,
     )
 
     serialized_edges = []
 
-    for e in edges:
-        serialized_edges.append(
-            {
-                "from": e["from"],
-                "to": e["to"],
-                "type": e["type"],
-                "token": e["token"],
-                "amount": _edge_amount(e),
-                "hop": e["hop"],
-                "timestamp": e["timestamp"],
-                "tx_hash": e["tx_hash"],
-                "is_spoofed_token": e.get(
-                    "is_spoofed_token",
-                    False,
-                ),
-                "function_name": e.get("function_name"),
-            }
-        )
+    for edge in edges:
+        serialized = {
+            key: value
+            for key, value in edge.items()
+            if key != "_raw"
+        }
 
-    raw_records = [
-        e["_raw"]
-        for e in edges
-        if e.get("_raw")
-    ]
+        serialized["amount"] = _edge_amount(edge)
+        serialized_edges.append(serialized)
+
+    raw_records = []
+
+    for edge in edges:
+        raw = edge.get("_raw")
+
+        if raw is not None:
+            raw_records.append(raw)
 
     evidence_core = {
         "address": address,
@@ -323,358 +310,130 @@ def trace(
     evidence_hash = compute_hash(evidence_core)
 
     trace_id = save_trace(
-        address,
-        chain_id,
-        summary,
-        serialized_edges,
-        risk,
-        evidence_hash=evidence_hash,
+        address=address,
+        chain_id=chain_id,
+        max_hops=max_hops,
+        risk=risk,
         tags=tags,
+        evidence_hash=evidence_hash,
     )
-
-    print(f"[DB] Trace saved successfully. trace_id={trace_id}")
-
-    print("[DEBUG] Starting evidence Blob upload")
 
     evidence_blob_url = upload_evidence(
         trace_id,
         {
-            "address": address,
-            "raw_records": raw_records,
-            "derived_edges": serialized_edges,
-            "evidence_hash": evidence_hash,
+            **evidence_core,
+            "sha256": evidence_hash,
         },
     )
 
-    print(
-        f"[EVIDENCE] Uploaded to Blob: {evidence_blob_url}"
-    )
-
-    print("[DEBUG] Starting graph Blob upload")
-
-    graph_bytes = render_graph(
+    graph_html = render_graph(
         G,
+        address=address,
+        chain_id=chain_id,
         tags=tags,
-        start_address=address,
+        risk=risk,
     )
 
     graph_blob_url = upload_graph(
         trace_id,
-        graph_bytes,
+        graph_html,
     )
 
-    print(
-        f"[GRAPH] Uploaded to Blob: {graph_blob_url}"
-    )
-
-    print("[DEBUG] Starting report Blob upload")
-
-    report_bytes = generate_pdf_report(
-        summary,
-        risk,
+    report_pdf = generate_pdf_report(
         trace_id=trace_id,
-        evidence={
-            "hash": evidence_hash,
-        },
+        address=address,
+        chain_id=chain_id,
+        edges=serialized_edges,
+        tags=tags,
+        table=table,
+        summary=summary,
+        risk=risk,
+        cross_chain=cross_chain,
     )
 
     report_blob_url = upload_report(
         trace_id,
-        report_bytes,
+        report_pdf,
     )
 
-    print(
-        f"[REPORT] Uploaded to Blob: {report_blob_url}"
-    )
-
-    alert_message = raise_alert(
+    alert = raise_alert(
         address,
         risk,
         trace_id=trace_id,
     )
 
-    if alert_message:
+    if alert:
         save_alert(
-            trace_id,
-            address,
-            risk["level"],
-            alert_message,
-        )
-
-        print(
-            f"[DB] Alert saved successfully for trace_id={trace_id}"
+            trace_id=trace_id,
+            address=address,
+            risk=risk,
+            message=alert,
         )
 
     workspace_id = ensure_workspace(
-        trace_id,
-        address,
-        chain=_chain_name(chain_id),
-        complaint_id=f"NCRP/2026/LIVE/{trace_id:06d}",
+        trace_id=trace_id,
+        address=address,
+        chain_id=chain_id,
+        risk=risk,
     )
 
     return {
         "trace_id": trace_id,
         "workspace_id": workspace_id,
         "address": address,
+        "chain_id": chain_id,
+        "chain": _chain_name(chain_id),
         "edges": serialized_edges,
         "tags": tags,
-        "investigation_table": table,
+        "table": table,
         "summary": summary,
         "risk": risk,
-        "report_path": None,
-        "report_url": f"/report/{trace_id}",
-        "graph_url": f"/graph/{trace_id}",
-        "evidence_url": f"/evidence/{trace_id}",
-        "blob_artifacts": {
-            "report": report_blob_url,
-            "graph": graph_blob_url,
+        "cross_chain": cross_chain,
+        "artifacts": {
             "evidence": evidence_blob_url,
+            "graph": graph_blob_url,
+            "report": report_blob_url,
         },
-        "alert_raised": alert_message,
     }
 
 
 @app.post("/ingest-complaint")
 def ingest_complaint(address: str):
-    address = address.lower()
+    address = address.lower().strip()
 
-    print(
-        f"[MOCK] Complaint received for wallet: {address}"
+    if not address:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet address is required.",
+        )
+
+    print(f"[MOCK] Complaint received for wallet: {address}")
+
+    result = trace(
+        address=address,
+        chain_id=DEFAULT_CHAIN_ID,
+        max_hops=3,
+        check_cross_chain=True,
     )
 
-    result = trace(address)
-
     save_complaint(
-        address,
+        address=address,
         source="NCRP/SAHYOG (mock)",
         trace_id=result.get("trace_id"),
     )
 
-    return result
-
-
-@app.get("/members")
-def members():
-    return MEMBERS
-
-
-@app.get("/workspaces")
-def workspaces(limit: int = 100):
-    if limit < 1 or limit > 500:
-        raise HTTPException(
-            status_code=400,
-            detail="limit must be between 1 and 500",
-        )
-
-    return list_workspaces(limit)
-
-
-@app.get("/workspaces/{workspace_id}")
-def workspace(workspace_id: str):
-    result = get_workspace(workspace_id)
-
-    if not result:
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    return result
-
-
-@app.patch("/workspaces/{workspace_id}/status")
-def workspace_status(
-    workspace_id: str,
-    payload: StatusIn,
-):
-    try:
-        ok = update_status(
-            workspace_id,
-            payload.status,
-            payload.actor,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        )
-
-    if not ok:
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    return get_workspace(workspace_id)
-
-
-@app.post("/workspaces/{workspace_id}/comments")
-def workspace_comment(
-    workspace_id: str,
-    payload: CommentIn,
-):
-    if not get_workspace(workspace_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
     return {
-        "id": add_comment(
-            workspace_id,
-            payload.text.strip(),
-            payload.actor,
-        ),
-        **get_workspace(workspace_id),
+        "message": "Complaint ingested.",
+        "source": "NCRP/SAHYOG (mock)",
+        "trace": result,
     }
 
 
-@app.post("/workspaces/{workspace_id}/tasks")
-def workspace_task(
-    workspace_id: str,
-    payload: TaskIn,
-):
-    if not get_workspace(workspace_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    task_id = add_task(
-        workspace_id,
-        payload.text.strip(),
-        payload.assignee,
-        payload.actor,
-    )
-
+@app.get("/dashboard")
+def dashboard():
     return {
-        "task_id": task_id,
-        **get_workspace(workspace_id),
-    }
-
-
-@app.patch("/workspaces/{workspace_id}/tasks/{task_id}")
-def workspace_task_toggle(
-    workspace_id: str,
-    task_id: str,
-    actor: str = "m1",
-):
-    result = toggle_task(
-        workspace_id,
-        task_id,
-        actor,
-    )
-
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found",
-        )
-
-    return get_workspace(workspace_id)
-
-
-@app.post("/workspaces/{workspace_id}/members")
-def workspace_invite(
-    workspace_id: str,
-    payload: InviteIn,
-):
-    if not get_workspace(workspace_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    try:
-        invite_member(
-            workspace_id,
-            payload.member_id,
-            payload.actor,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        )
-
-    return get_workspace(workspace_id)
-
-
-@app.patch("/alerts/{alert_id}/ack")
-def alert_ack(alert_id: str):
-    if not acknowledge_alert(alert_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Alert not found",
-        )
-
-    return {
-        "ok": True,
-        "alert_id": alert_id,
-    }
-
-
-@app.post("/workspaces/{workspace_id}/nodes/{address}/flag")
-def node_flag(
-    workspace_id: str,
-    address: str,
-    actor: str = "m1",
-):
-    if not get_workspace(workspace_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    flagged = toggle_node_flag(
-        workspace_id,
-        address.lower(),
-        actor,
-    )
-
-    return {
-        "flagged": flagged,
-        "workspace": get_workspace(workspace_id),
-    }
-
-
-@app.post("/workspaces/{workspace_id}/nodes/{address}/notes")
-def node_note(
-    workspace_id: str,
-    address: str,
-    payload: NodeNoteIn,
-):
-    if not get_workspace(workspace_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    add_node_note(
-        workspace_id,
-        address.lower(),
-        payload.text.strip(),
-        payload.actor,
-    )
-
-    return get_workspace(workspace_id)
-
-
-@app.post("/workspaces/{workspace_id}/report")
-def workspace_report(workspace_id: str):
-    ws = get_workspace(workspace_id)
-
-    if not ws:
-        raise HTTPException(
-            status_code=404,
-            detail="Workspace not found",
-        )
-
-    trace_id = ws["traceId"]
-
-    return {
-        "trace_id": trace_id,
-        "report_url": f"/report/{trace_id}",
+        "traces": get_all_traces(),
+        "alerts": get_all_alerts(),
     }
 
 
@@ -683,152 +442,90 @@ def dashboard_stats(days: int = 30):
     if days < 1 or days > 365:
         raise HTTPException(
             status_code=400,
-            detail="days must be between 1 and 365",
+            detail="days must be between 1 and 365.",
         )
 
-    traces = get_all_traces(500)
-    alerts = get_all_alerts(500)
-
-    active = [
-        t
-        for t in traces
-        if t.get("risk_level")
-        and t.get("risk_level") != "Low"
-    ]
-
-    vasp_hits = {}
-
-    entity_counts = {
-        "vasp": 0,
-        "mixer": 0,
-        "bridge": 0,
-        "contract": 0,
-        "unknown": 0,
-    }
-
-    for t in traces:
-        tags = t.get("tags_json") or {}
-
-        for tag in tags.values():
-            typ = (tag or {}).get(
-                "entity_type",
-                "unknown",
-            )
-
-            entity_counts[typ] = (
-                entity_counts.get(typ, 0) + 1
-            )
-
-            if typ == "vasp":
-                label = (tag or {}).get(
-                    "label",
-                    "Unknown VASP",
-                )
-
-                vasp_hits[label] = (
-                    vasp_hits.get(label, 0) + 1
-                )
+    traces = get_all_traces()
+    alerts = get_all_alerts()
 
     return {
-        "active_cases": len(active),
-        "total_workspaces": len(traces),
-        "critical_cases": sum(
-            1
-            for t in traces
-            if t.get("risk_level") == "Critical"
-        ),
-        "funds_traced_inr": 0,
-        "vasps_identified": len(vasp_hits),
-        "open_alerts": sum(
-            1
-            for a in alerts
-            if not a.get("acknowledged", False)
-        ),
-        "entity_counts": entity_counts,
-        "top_exchanges": sorted(
-            (
-                {
-                    "name": k,
-                    "hits": v,
-                }
-                for k, v in vasp_hits.items()
-            ),
-            key=lambda x: x["hits"],
-            reverse=True,
-        )[:6],
+        "days": days,
+        "total_traces": len(traces),
+        "total_alerts": len(alerts),
+        "traces": traces,
+        "alerts": alerts,
     }
 
 
-@app.get(
-    "/graph/{trace_id}",
-    response_class=HTMLResponse,
-)
-async def graph_for_trace(trace_id: int):
-    blob_path = f"citrus/graphs/graph_{trace_id}.html"
+@app.get("/traces")
+def traces():
+    return get_all_traces()
 
-    result = await get_blob(blob_path)
 
-    if result is None or result.status_code != 200:
+@app.get("/alerts")
+def alerts():
+    return get_all_alerts()
+
+
+@app.get("/graph/{trace_id}")
+async def get_graph(trace_id: int):
+    blob_path = f"graphs/graph_{trace_id}.html"
+
+    try:
+        result = await get_blob(blob_path)
+    except Exception as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"No graph stored for trace {trace_id}.",
+            detail=f"Graph not found: {exc}",
         )
 
     return HTMLResponse(
         content=result.content.decode("utf-8"),
-        status_code=200,
+        media_type="text/html",
     )
 
 
 @app.get("/evidence/{trace_id}")
 async def get_evidence(trace_id: int):
-    blob_path = f"citrus/evidence/evidence_{trace_id}.json"
+    blob_path = f"evidence/evidence_{trace_id}.json"
 
-    result = await get_blob(blob_path)
-
-    if result is None or result.status_code != 200:
+    try:
+        result = await get_blob(blob_path)
+    except Exception as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"No evidence bundle found for trace {trace_id}.",
+            detail=f"Evidence not found: {exc}",
         )
 
     return Response(
         content=result.content,
-        media_type=result.content_type or "application/json",
-        headers={
-            "Content-Disposition": (
-                f'inline; filename="evidence_{trace_id}.json"'
-            )
-        },
+        media_type="application/json",
     )
 
 
 @app.get("/evidence/{trace_id}/verify")
 async def verify_evidence_endpoint(trace_id: int):
-    blob_path = f"citrus/evidence/evidence_{trace_id}.json"
+    blob_path = f"evidence/evidence_{trace_id}.json"
 
-    result = await get_blob(blob_path)
-
-    if result is None or result.status_code != 200:
+    try:
+        result = await get_blob(blob_path)
+    except Exception as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"No evidence bundle found for trace {trace_id}.",
+            detail=f"Evidence not found: {exc}",
         )
 
     try:
-        bundle = json.loads(
-            result.content.decode("utf-8")
-        )
-    except Exception:
+        bundle = json.loads(result.content.decode("utf-8"))
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail="Stored evidence bundle is invalid JSON.",
+            detail=f"Invalid evidence JSON: {exc}",
         )
 
     stored_hash = bundle.get("sha256")
 
     core = {
-        "trace_id": bundle.get("trace_id"),
         "address": bundle.get("address"),
         "raw_records": bundle.get("raw_records"),
         "derived_edges": bundle.get("derived_edges"),
@@ -845,91 +542,247 @@ async def verify_evidence_endpoint(trace_id: int):
     }
 
 
-@app.get("/traces")
-def list_traces(limit: int = 50):
-    if limit < 1 or limit > 500:
-        raise HTTPException(
-            status_code=400,
-            detail="limit must be between 1 and 500",
-        )
-
-    return get_all_traces(limit)
-
-@app.get("/reports")
-def list_reports(limit: int = 100):
-    if limit < 1 or limit > 500:
-        raise HTTPException(
-            status_code=400,
-            detail="limit must be between 1 and 500",
-        )
-
-    rows = get_all_traces(limit)
-    workspaces = list_workspaces(500)
-
-    workspace_by_trace = {
-        ws.get("traceId"): ws
-        for ws in workspaces
-        if ws.get("traceId") is not None
-    }
-
-    reports = []
-
-    for row in rows:
-        workspace = workspace_by_trace.get(row["id"])
-
-        reports.append(
-            {
-                "id": f"r-{row['id']}",
-                "name": (
-                    f"Investigation report – "
-                    f"trace {row['id']}.pdf"
-                ),
-                "at": row["created_at"],
-                "by": "m1",
-                "kind": "PDF",
-                "workspaceId": (
-                    workspace["id"]
-                    if workspace
-                    else None
-                ),
-                "traceId": row["id"],
-                "reportUrl": f"/report/{row['id']}",
-                "evidenceUrl": f"/evidence/{row['id']}",
-            }
-        )
-
-    return reports
-
-
-@app.get("/alerts")
-def list_alerts(limit: int = 50):
-    if limit < 1 or limit > 500:
-        raise HTTPException(
-            status_code=400,
-            detail="limit must be between 1 and 500",
-        )
-
-    return get_all_alerts(limit)
-
-
 @app.get("/report/{trace_id}")
-async def view_report(trace_id: int):
-    blob_path = f"citrus/reports/report_{trace_id}.pdf"
+async def get_report(trace_id: int):
+    blob_path = f"reports/report_{trace_id}.pdf"
 
-    result = await get_blob(blob_path)
-
-    if result is None or result.status_code != 200:
+    try:
+        result = await get_blob(blob_path)
+    except Exception as exc:
         raise HTTPException(
             status_code=404,
-            detail=f"No report found for trace {trace_id}.",
+            detail=f"Report not found: {exc}",
         )
 
     return Response(
         content=result.content,
-        media_type=result.content_type or "application/pdf",
+        media_type="application/pdf",
         headers={
-            "Content-Disposition": (
-                f'inline; filename="report_{trace_id}.pdf"'
-            )
+            "Content-Disposition": f"inline; filename=report_{trace_id}.pdf"
         },
     )
+
+
+@app.get("/reports")
+def reports():
+    traces = get_all_traces()
+
+    return [
+        {
+            "trace_id": trace.get("trace_id"),
+            "address": trace.get("address"),
+            "chain_id": trace.get("chain_id"),
+            "risk": trace.get("risk"),
+            "created_at": trace.get("created_at"),
+        }
+        for trace in traces
+    ]
+
+
+@app.get("/members")
+def members():
+    return MEMBERS
+
+
+@app.get("/workspaces")
+def workspaces():
+    return list_workspaces()
+
+
+@app.get("/workspaces/{workspace_id}")
+def workspace(workspace_id: str):
+    result = get_workspace(workspace_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.patch("/workspaces/{workspace_id}/status")
+def workspace_status(
+    workspace_id: str,
+    payload: StatusIn,
+):
+    if payload.status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Valid statuses: {sorted(VALID_STATUSES)}",
+        )
+
+    result = update_status(
+        workspace_id,
+        payload.status,
+        payload.actor,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/comments")
+def workspace_comment(
+    workspace_id: str,
+    payload: CommentIn,
+):
+    result = add_comment(
+        workspace_id,
+        payload.text,
+        payload.actor,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/tasks")
+def workspace_task(
+    workspace_id: str,
+    payload: TaskIn,
+):
+    result = add_task(
+        workspace_id,
+        payload.text,
+        payload.assignee,
+        payload.actor,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.patch("/workspaces/{workspace_id}/tasks/{task_id}")
+def workspace_task_toggle(
+    workspace_id: str,
+    task_id: str,
+):
+    result = toggle_task(
+        workspace_id,
+        task_id,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace or task not found.",
+        )
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/members")
+def workspace_invite(
+    workspace_id: str,
+    payload: InviteIn,
+):
+    result = invite_member(
+        workspace_id,
+        payload.member_id,
+        payload.actor,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.patch("/alerts/{alert_id}/ack")
+def acknowledge_workspace_alert(
+    alert_id: int,
+):
+    result = acknowledge_alert(alert_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Alert not found.",
+        )
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/nodes/{address}/flag")
+def flag_workspace_node(
+    workspace_id: str,
+    address: str,
+):
+    result = toggle_node_flag(
+        workspace_id,
+        address.lower(),
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/nodes/{address}/notes")
+def add_workspace_node_note(
+    workspace_id: str,
+    address: str,
+    payload: NodeNoteIn,
+):
+    result = add_node_note(
+        workspace_id,
+        address.lower(),
+        payload.text,
+        payload.actor,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/report")
+def workspace_report(workspace_id: str):
+    workspace_data = get_workspace(workspace_id)
+
+    if workspace_data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found.",
+        )
+
+    trace_id = workspace_data.get("trace_id")
+
+    if trace_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Trace not found for workspace.",
+        )
+
+    return {
+        "trace_id": trace_id,
+        "report_url": f"/api/report/{trace_id}",
+    }

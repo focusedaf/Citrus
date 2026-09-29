@@ -1,7 +1,11 @@
 from config import (
-    LARGE_VALUE_ETH_THRESHOLD, DEEP_HOP_THRESHOLD,
-    FAN_OUT_THRESHOLD, FAN_IN_THRESHOLD, RAPID_MOVEMENT_SECONDS,
+    LARGE_VALUE_ETH_THRESHOLD,
+    DEEP_HOP_THRESHOLD,
+    FAN_OUT_THRESHOLD,
+    FAN_IN_THRESHOLD,
+    RAPID_MOVEMENT_SECONDS,
 )
+
 
 WEIGHTS = {
     "mixer_exposure": 40,
@@ -16,6 +20,7 @@ WEIGHTS = {
     "cross_chain_activity": 20,
 }
 
+
 RISK_THRESHOLDS = [
     (75, "Critical"),
     (50, "High"),
@@ -25,50 +30,111 @@ RISK_THRESHOLDS = [
 
 
 def _to_eth(edge):
-    if edge["token"] != "ETH":
+    if edge.get("token") != "ETH":
         return 0.0
-    return float(edge["value"]) / 1e18
+
+    try:
+        return float(edge.get("value", 0)) / 1e18
+    except (TypeError, ValueError):
+        return 0.0
 
 
-def compute_metrics(edges, tags, incoming_timestamps=None, cross_chain_findings=None):
+def compute_metrics(
+    edges,
+    tags,
+    incoming_timestamps=None,
+    cross_chain_findings=None,
+):
     incoming_timestamps = incoming_timestamps or {}
     cross_chain_findings = cross_chain_findings or {}
 
-    unique_hops = max([e["hop"] for e in edges], default=-1) + 1
-    transaction_count = len(edges)
-    unique_counterparties = len({e["to"] for e in edges if e["to"]})
+    unique_hops = max(
+        [e.get("hop", 0) for e in edges],
+        default=-1,
+    ) + 1
 
-    matched_types = {tag["entity_type"] for tag in tags.values() if tag}
+    transaction_count = len(edges)
+
+    unique_counterparties = len(
+        {
+            e.get("to")
+            for e in edges
+            if e.get("to")
+        }
+    )
+
+    matched_types = {
+        tag.get("entity_type")
+        for tag in tags.values()
+        if tag
+    }
+
     vasp_exposure = "vasp" in matched_types
     bridge_exposure = "bridge" in matched_types
     mixer_exposure = "mixer" in matched_types
 
-    fan_out = len({e["to"] for e in edges if e["hop"] == 0 and e["to"]})
+    fan_out = len(
+        {
+            e.get("to")
+            for e in edges
+            if e.get("hop") == 0 and e.get("to")
+        }
+    )
 
-    # Fan-in: count incoming edges per destination node, take the max.
     in_counts = {}
-    for e in edges:
-        if e["to"]:
-            in_counts[e["to"]] = in_counts.get(e["to"], 0) + 1
-    fan_in = max(in_counts.values()) if in_counts else 0
 
-    large_value = any(_to_eth(e) >= LARGE_VALUE_ETH_THRESHOLD for e in edges)
+    for edge in edges:
+        destination = edge.get("to")
 
-    spoofed_edges = [e for e in edges if e.get("is_spoofed_token")]
+        if destination:
+            in_counts[destination] = (
+                in_counts.get(destination, 0) + 1
+            )
+
+    fan_in = max(
+        in_counts.values(),
+        default=0,
+    )
+
+    large_value = any(
+        _to_eth(edge) >= LARGE_VALUE_ETH_THRESHOLD
+        for edge in edges
+    )
+
+    spoofed_edges = [
+        edge
+        for edge in edges
+        if edge.get("is_spoofed_token")
+    ]
+
     spoofed_token_detected = len(spoofed_edges) > 0
 
-    # Rapid movement: for each node we have an incoming timestamp for,
-    # check if any of its OUTGOING edges happened within the rapid window.
     rapid_movement_nodes = []
-    for e in edges:
-        node = e["from"]
-        if node in incoming_timestamps:
-            delta = e["timestamp"] - incoming_timestamps[node]
-            if 0 <= delta <= RAPID_MOVEMENT_SECONDS:
-                rapid_movement_nodes.append(node)
-    rapid_movement_detected = len(set(rapid_movement_nodes)) > 0
 
-    cross_chain_activity = len(cross_chain_findings) > 0
+    for edge in edges:
+        node = edge.get("from")
+
+        if node not in incoming_timestamps:
+            continue
+
+        try:
+            delta = (
+                edge.get("timestamp", 0)
+                - incoming_timestamps[node]
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if 0 <= delta <= RAPID_MOVEMENT_SECONDS:
+            rapid_movement_nodes.append(node)
+
+    rapid_movement_detected = bool(
+        rapid_movement_nodes
+    )
+
+    cross_chain_activity = bool(
+        cross_chain_findings
+    )
 
     return {
         "unique_hops": unique_hops,
@@ -83,63 +149,137 @@ def compute_metrics(edges, tags, incoming_timestamps=None, cross_chain_findings=
         "spoofed_token_detected": spoofed_token_detected,
         "spoofed_token_count": len(spoofed_edges),
         "rapid_movement_detected": rapid_movement_detected,
-        "rapid_movement_node_count": len(set(rapid_movement_nodes)),
+        "rapid_movement_node_count": len(
+            set(rapid_movement_nodes)
+        ),
         "cross_chain_activity": cross_chain_activity,
-        "cross_chain_chains_found": list(cross_chain_findings.keys()),
+        "cross_chain_chains_found": list(
+            cross_chain_findings.keys()
+        ),
     }
 
 
-def compute_risk(edges, tags, start_address=None, incoming_timestamps=None, cross_chain_findings=None):
+def compute_risk(
+    edges,
+    tags,
+    address=None,
+    incoming_timestamps=None,
+    cross_chain_results=None,
+    max_hops=None,
+    **kwargs,
+):
+    if cross_chain_results is None:
+        cross_chain_results = kwargs.get(
+            "cross_chain_findings",
+            {},
+        )
+
     if not edges:
         return {
-            "score": 0, "level": "Low",
+            "score": 0,
+            "level": "Low",
             "label": "Rule-Based Risk Indicator (Prototype)",
-            "reasons": [], "metrics": {},
+            "reasons": [],
+            "metrics": {},
         }
 
-    metrics = compute_metrics(edges, tags, incoming_timestamps, cross_chain_findings)
+    metrics = compute_metrics(
+        edges,
+        tags,
+        incoming_timestamps=incoming_timestamps,
+        cross_chain_findings=cross_chain_results,
+    )
+
     score = 0
     reasons = []
 
     def add(key, text):
         nonlocal score
+
         score += WEIGHTS[key]
-        reasons.append(f"+{WEIGHTS[key]} {text}")
+        reasons.append(
+            f"+{WEIGHTS[key]} {text}"
+        )
 
     if metrics["mixer_exposure"]:
-        add("mixer_exposure", "funds passed through a known mixer/tumbler")
+        add(
+            "mixer_exposure",
+            "funds passed through a known mixer/tumbler",
+        )
 
     if metrics["spoofed_token_detected"]:
-        add("spoofed_token", f"spoofed/lookalike token detected ({metrics['spoofed_token_count']} transfer(s))")
+        add(
+            "spoofed_token",
+            "spoofed/lookalike token detected "
+            f"({metrics['spoofed_token_count']} transfer(s))",
+        )
 
     if metrics["bridge_exposure"]:
-        add("bridge_exposure", "funds crossed a known bridge (cross-chain movement)")
+        add(
+            "bridge_exposure",
+            "funds reached a known bridge",
+        )
 
     if metrics["vasp_exposure"]:
-        add("vasp_exposure", "funds reached a known VASP")
+        add(
+            "vasp_exposure",
+            "funds reached a known VASP",
+        )
 
     if metrics["cross_chain_activity"]:
-        chains = ", ".join(metrics["cross_chain_chains_found"])
-        add("cross_chain_activity", f"traced address also active on other chains ({chains})")
+        chains = ", ".join(
+            metrics["cross_chain_chains_found"]
+        )
+
+        add(
+            "cross_chain_activity",
+            "traced address also active on other "
+            f"chains ({chains})",
+        )
 
     if metrics["rapid_movement_detected"]:
-        add("rapid_movement", f"rapid pass-through detected at {metrics['rapid_movement_node_count']} node(s) (funds forwarded within {RAPID_MOVEMENT_SECONDS // 60} min of receipt)")
+        add(
+            "rapid_movement",
+            "rapid pass-through detected at "
+            f"{metrics['rapid_movement_node_count']} "
+            "node(s) "
+            f"(funds forwarded within "
+            f"{RAPID_MOVEMENT_SECONDS // 60} min of receipt)",
+        )
 
     if metrics["unique_hops"] >= DEEP_HOP_THRESHOLD:
-        add("deep_hops", f"deep layering ({metrics['unique_hops']} hops)")
+        add(
+            "deep_hops",
+            f"deep layering ({metrics['unique_hops']} hops)",
+        )
 
     if metrics["fan_out"] >= FAN_OUT_THRESHOLD:
-        add("fan_out", f"fan-out pattern ({metrics['fan_out']} addresses funded directly from source)")
+        add(
+            "fan_out",
+            "fan-out pattern "
+            f"({metrics['fan_out']} addresses funded "
+            "directly from source)",
+        )
 
     if metrics["fan_in"] >= FAN_IN_THRESHOLD:
-        add("fan_in", f"fan-in pattern ({metrics['fan_in']} sources converging on one address)")
+        add(
+            "fan_in",
+            "fan-in pattern "
+            f"({metrics['fan_in']} sources converging "
+            "on one address)",
+        )
 
     if metrics["large_value_transfer"]:
-        add("large_value", f"large single transfer (>= {LARGE_VALUE_ETH_THRESHOLD} ETH)")
+        add(
+            "large_value",
+            "large single transfer "
+            f"(>= {LARGE_VALUE_ETH_THRESHOLD} ETH)",
+        )
 
     score = min(score, 100)
 
     level = "Low"
+
     for threshold, label in RISK_THRESHOLDS:
         if score >= threshold:
             level = label

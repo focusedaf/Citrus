@@ -517,35 +517,41 @@ def tag_address_heuristic(
 
     return None
 
-
 def tag_all(
-    addresses,
+    address,
     edges=None,
     api_key=None,
     chain_id=1,
 ):
     edges = edges or []
 
+    addresses = {address.lower()}
     fn_by_address = {}
 
     for edge in edges:
-        function_name = edge.get("function_name")
+        from_address = edge.get("from")
         to_address = edge.get("to")
+        function_name = edge.get("function_name")
 
-        if function_name and to_address:
-            fn_by_address.setdefault(
-                to_address.lower(),
-                [],
-            ).append(function_name)
+        if from_address:
+            addresses.add(from_address.lower())
+
+        if to_address:
+            to_address = to_address.lower()
+            addresses.add(to_address)
+
+            if function_name:
+                fn_by_address.setdefault(
+                    to_address,
+                    [],
+                ).append(function_name)
 
     tags = {}
 
-    for address in addresses:
-        tags[address] = tag_address_heuristic(
-            address,
-            function_names=fn_by_address.get(
-                address.lower()
-            ),
+    for wallet_address in addresses:
+        tags[wallet_address] = tag_address_heuristic(
+            wallet_address,
+            function_names=fn_by_address.get(wallet_address),
             api_key=api_key,
             chain_id=chain_id,
         )
