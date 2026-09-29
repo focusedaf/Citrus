@@ -111,10 +111,19 @@ def _etherscan_fetch(
     chain_id,
     limit,
     extra_params="",
+    scan_limit=None,
 ):
+    """Fetch enough history to avoid dropping outgoing txs hidden by newer incoming txs.
+
+    Etherscan returns address history ordered by the requested sort. The old
+    implementation sliced to `limit` BEFORE the caller filtered for outgoing
+    transactions, which could turn a very active wallet into an empty result.
+    """
     if not ETHERSCAN_API_KEY:
         print("[tracer] Etherscan API key missing")
         return None
+
+    scan_limit = max(int(scan_limit or limit), int(limit), 100)
 
     url = (
         f"{BASE_URL}"
@@ -122,6 +131,8 @@ def _etherscan_fetch(
         f"&module=account"
         f"&action={action}"
         f"&address={address}"
+        f"&page=1"
+        f"&offset={scan_limit}"
         f"&sort=desc"
         f"{extra_params}"
         f"&apikey={ETHERSCAN_API_KEY}"
@@ -130,7 +141,7 @@ def _etherscan_fetch(
     try:
         response = requests.get(
             url,
-            timeout=10,
+            timeout=15,
         )
         response.raise_for_status()
         data = response.json()
@@ -143,20 +154,32 @@ def _etherscan_fetch(
         return None
 
     if data.get("status") != "1":
+        message = data.get("message")
+        result_message = data.get("result")
         print(
             f"[tracer] Etherscan {action} "
             f"(chain {chain_id}) -> "
-            f"{data.get('message')}: "
-            f"{data.get('result')}"
+            f"{message}: {result_message}"
         )
         return None
 
     result = data.get("result", [])
 
     if not isinstance(result, list):
+        print(
+            f"[tracer] Etherscan {action} "
+            f"(chain {chain_id}) returned non-list result"
+        )
         return None
 
-    return result[:limit]
+    print(
+        f"[tracer] Etherscan {action} "
+        f"chain={chain_id}: fetched {len(result)} records"
+    )
+
+    # Keep the larger scan set here. Callers filter direction/type first,
+    # then apply their requested limit.
+    return result
 
 
 def _goldrush_headers():
@@ -328,6 +351,7 @@ def _alchemy_fetch_transfers(
     chain_id,
     limit=10,
     direction="outgoing",
+    categories=None,
 ):
     if chain_id not in ALCHEMY_NETWORKS:
         return None
@@ -335,11 +359,12 @@ def _alchemy_fetch_transfers(
     transfers = []
     page_key = None
 
-    categories = [
-        "external",
-        "internal",
-        "erc20",
-    ]
+    if categories is None:
+        categories = [
+            "external",
+            "internal",
+            "erc20",
+        ]
 
     try:
         while len(transfers) < limit:
@@ -819,12 +844,6 @@ def get_eth_transactions(
             if raw is None:
                 continue
 
-            print(
-                f"[tracer] ETH transactions "
-                f"chain={chain_id}: "
-                f"Etherscan"
-            )
-
             outgoing = [
                 tx
                 for tx in raw
@@ -833,13 +852,22 @@ def get_eth_transactions(
                 ) == address
             ]
 
-            return [
-                _normalize_etherscan_transaction(
-                    tx,
-                    chain_id,
-                )
-                for tx in outgoing
-            ]
+            print(
+                f"[tracer] ETH transactions "
+                f"chain={chain_id}: Etherscan "
+                f"raw={len(raw)} outgoing={len(outgoing)}"
+            )
+
+            if outgoing:
+                return [
+                    _normalize_etherscan_transaction(
+                        tx,
+                        chain_id,
+                    )
+                    for tx in outgoing[:limit]
+                ]
+
+            continue
 
         if provider == "goldrush":
             raw = _goldrush_fetch_transactions(
@@ -857,7 +885,7 @@ def get_eth_transactions(
                 f"GoldRush"
             )
 
-            return [
+            transfers = [
                 _normalize_goldrush_transaction(
                     tx,
                     address,
@@ -865,11 +893,14 @@ def get_eth_transactions(
                 )
                 for tx in raw
                 if _normalize_address(
-                    tx.get(
-                        "from_address"
-                    )
+                    tx.get("from_address")
                 ) == address
             ]
+
+            if transfers:
+                return transfers[:limit]
+
+            continue
 
         if provider == "alchemy":
             raw = _alchemy_fetch_transfers(
@@ -877,6 +908,7 @@ def get_eth_transactions(
                 chain_id,
                 limit,
                 direction="outgoing",
+                categories=["external"],
             )
 
             if raw is None:
@@ -888,7 +920,7 @@ def get_eth_transactions(
                 f"Alchemy"
             )
 
-            return [
+            transfers = [
                 _normalize_alchemy_transfer(
                     tx,
                     address,
@@ -899,14 +931,14 @@ def get_eth_transactions(
                     _normalize_address(
                         tx.get("from")
                     ) == address
-                    and tx.get(
-                        "category"
-                    ) in {
-                        "external",
-                        "internal",
-                    }
+                    and tx.get("category") == "external"
                 )
             ]
+
+            if transfers:
+                return transfers[:limit]
+
+            continue
 
     return []
 
@@ -1085,12 +1117,6 @@ def get_token_transactions(
             if raw is None:
                 continue
 
-            print(
-                f"[tracer] ERC20 transactions "
-                f"chain={chain_id}: "
-                f"Etherscan"
-            )
-
             outgoing = [
                 tx
                 for tx in raw
@@ -1099,13 +1125,22 @@ def get_token_transactions(
                 ) == address
             ]
 
-            return [
-                _normalize_etherscan_token(
-                    tx,
-                    chain_id,
-                )
-                for tx in outgoing
-            ]
+            print(
+                f"[tracer] ERC20 transactions "
+                f"chain={chain_id}: Etherscan "
+                f"raw={len(raw)} outgoing={len(outgoing)}"
+            )
+
+            if outgoing:
+                return [
+                    _normalize_etherscan_token(
+                        tx,
+                        chain_id,
+                    )
+                    for tx in outgoing[:limit]
+                ]
+
+            continue
 
         if provider == "goldrush":
             raw = _goldrush_token_transfers(
@@ -1123,7 +1158,10 @@ def get_token_transactions(
                 f"GoldRush"
             )
 
-            return raw
+            if raw:
+                return raw[:limit]
+
+            continue
 
         if provider == "alchemy":
             raw = _alchemy_fetch_transfers(
@@ -1131,6 +1169,7 @@ def get_token_transactions(
                 chain_id,
                 limit,
                 direction="outgoing",
+                categories=["erc20"],
             )
 
             if raw is None:
@@ -1142,7 +1181,7 @@ def get_token_transactions(
                 f"Alchemy"
             )
 
-            return [
+            transfers = [
                 _normalize_alchemy_transfer(
                     tx,
                     address,
@@ -1153,11 +1192,14 @@ def get_token_transactions(
                     _normalize_address(
                         tx.get("from")
                     ) == address
-                    and tx.get(
-                        "category"
-                    ) == "erc20"
+                    and tx.get("category") == "erc20"
                 )
             ]
+
+            if transfers:
+                return transfers[:limit]
+
+            continue
 
     return []
 
@@ -1178,12 +1220,6 @@ def get_internal_transactions(
     )
 
     if raw is not None:
-        print(
-            f"[tracer] Internal transactions "
-            f"chain={chain_id}: "
-            f"Etherscan"
-        )
-
         outgoing = [
             tx
             for tx in raw
@@ -1192,19 +1228,27 @@ def get_internal_transactions(
             ) == address
         ]
 
-        return [
-            _normalize_etherscan_internal(
-                tx,
-                chain_id,
-            )
-            for tx in outgoing
-        ]
+        print(
+            f"[tracer] Internal transactions "
+            f"chain={chain_id}: Etherscan "
+            f"raw={len(raw)} outgoing={len(outgoing)}"
+        )
+
+        if outgoing:
+            return [
+                _normalize_etherscan_internal(
+                    tx,
+                    chain_id,
+                )
+                for tx in outgoing[:limit]
+            ]
 
     raw = _alchemy_fetch_transfers(
         address,
         chain_id,
         limit,
         direction="outgoing",
+        categories=["internal"],
     )
 
     if raw is not None:
