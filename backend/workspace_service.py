@@ -32,6 +32,7 @@ def ensure_workspace(
     address,
     chain=None,
     chain_id=None,
+    risk=None,
     complaint_id=None,
     source="NCRP/SAHYOG (mock)",
 ):

@@ -227,7 +227,7 @@ def trace(
                     max_hops=max_hops,
                     )
 
-            ensure_workspace(
+            workspace_id = ensure_workspace(
                 trace_id=trace_id,
                 address=address,
                 chain_id=chain_id,
@@ -236,7 +236,7 @@ def trace(
 
             return {
                 "trace_id": trace_id,
-                "workspace_id": f"CT-{trace_id}",
+                "workspace_id": workspace_id,
                 "address": address,
                 "chain_id": chain_id,
                 "chain": _chain_name(chain_id),
@@ -796,7 +796,7 @@ def workspace_report(workspace_id: str):
             detail="Workspace not found.",
         )
 
-    trace_id = workspace_data.get("trace_id")
+    trace_id = workspace_data.get("traceId")
 
     if trace_id is None:
         raise HTTPException(
