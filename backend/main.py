@@ -163,70 +163,221 @@ def trace(
     max_hops: int = 3,
     check_cross_chain: bool = True,
 ):
-    address = address.lower().strip()
+    try:
+        address = address.lower().strip()
 
-    if not address:
-        raise HTTPException(
-            status_code=400,
-            detail="Wallet address is required.",
+        if not address:
+            raise HTTPException(
+                status_code=400,
+                detail="Wallet address is required.",
+            )
+
+        if chain_id not in SUPPORTED_CHAINS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported chain_id: {chain_id}",
+            )
+
+        if max_hops < 1 or max_hops > 10:
+            raise HTTPException(
+                status_code=400,
+                detail="max_hops must be between 1 and 10.",
+            )
+
+        if not any(
+            [
+                os.getenv("ETHERSCAN_KEY"),
+                os.getenv("ALCHEMY_API_KEY"),
+                os.getenv("GOLDRUSH_API_KEY"),
+                os.getenv("QUICKNODE_BSC_URL"),
+            ]
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail="No blockchain data provider is configured.",
+            )
+
+        edges, incoming_timestamps = trace_wallet(
+            address,
+            API_KEY,
+            chain_id=chain_id,
+            max_hops=max_hops,
         )
 
-    if chain_id not in SUPPORTED_CHAINS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported chain_id: {chain_id}",
-        )
+        if not edges:
+            risk = {
+                "score": 0,
+                "level": "Low",
+                "reasons": ["No outgoing transactions found."],
+            }
 
-    if max_hops < 1 or max_hops > 10:
-        raise HTTPException(
-            status_code=400,
-            detail="max_hops must be between 1 and 10.",
-        )
+            trace_id = save_trace(
+                    address=address,
+                    chain_id=chain_id,
+                    summary={
+                        "chain": _chain_name(chain_id),
+                        "address": address,
+                        "nodes": 1,
+                        "edges": 0,
+                    },
+                    edges=[],
+                    risk=risk,
+                    tags={},
+                    evidence_hash=None,
+                    max_hops=max_hops,
+                    )
 
-    if not any(
-        [
-            os.getenv("ETHERSCAN_KEY"),
-            os.getenv("ALCHEMY_API_KEY"),
-            os.getenv("GOLDRUSH_API_KEY"),
-            os.getenv("QUICKNODE_BSC_URL"),
-        ]
-    ):
-        raise HTTPException(
-            status_code=500,
-            detail="No blockchain data provider is configured.",
-        )
-
-    edges, incoming_timestamps = trace_wallet(
-        address,
-        API_KEY,
-        chain_id=chain_id,
-        max_hops=max_hops,
-    )
-
-    if not edges:
-        risk = {
-            "score": 0,
-            "level": "Low",
-            "reasons": ["No outgoing transactions found."],
-        }
-
-        trace_id = save_trace(
+            ensure_workspace(
+                trace_id=trace_id,
                 address=address,
                 chain_id=chain_id,
-                summary={
+                risk=risk,
+            )
+
+            return {
+                "trace_id": trace_id,
+                "workspace_id": f"CT-{trace_id}",
+                "address": address,
+                "chain_id": chain_id,
+                "chain": _chain_name(chain_id),
+                "edges": [],
+                "tags": [],
+                "table": [],
+                "summary": {
                     "chain": _chain_name(chain_id),
                     "address": address,
                     "nodes": 1,
                     "edges": 0,
                 },
-                edges=[],
-                risk=risk,
-                tags={},
-                evidence_hash=None,
-                max_hops=max_hops,
-                )
+                "risk": risk,
+                "cross_chain": [],
+            }
 
-        ensure_workspace(
+        G = build_graph(edges)
+
+        tags = tag_all(
+            address,
+            edges,
+            chain_id=chain_id,
+        )
+
+        cross_chain = []
+
+        if check_cross_chain:
+            cross_chain = cross_chain_reuse_check(
+                address
+            )
+
+        risk = compute_risk(
+            address=address,
+            edges=edges,
+            tags=tags,
+            incoming_timestamps=incoming_timestamps,
+            cross_chain_results=cross_chain,
+            max_hops=max_hops,
+        )
+
+        table = investigation_table(G)
+
+        summary = investigation_summary(
+            G,
+            address=address,
+            chain_id=chain_id,
+            tags=tags,
+            risk=risk,
+            cross_chain=cross_chain,
+        )
+
+        serialized_edges = []
+
+        for edge in edges:
+            serialized = {
+                key: value
+                for key, value in edge.items()
+                if key != "_raw"
+            }
+
+            serialized["amount"] = _edge_amount(edge)
+            serialized_edges.append(serialized)
+
+        raw_records = []
+
+        for edge in edges:
+            raw = edge.get("_raw")
+
+            if raw is not None:
+                raw_records.append(raw)
+
+        evidence_core = {
+            "address": address,
+            "raw_records": raw_records,
+            "derived_edges": serialized_edges,
+        }
+
+        evidence_hash = compute_hash(evidence_core)
+
+        trace_id = save_trace(
+        address=address,
+        chain_id=chain_id,
+        summary=summary,
+        edges=serialized_edges,
+        risk=risk,
+        tags=tags,
+        evidence_hash=evidence_hash,
+        max_hops=max_hops,
+        )
+
+        evidence_blob_url = upload_evidence(
+            trace_id,
+            {
+                **evidence_core,
+                "sha256": evidence_hash,
+            },
+        )
+
+        graph_html = render_graph(
+        G,
+        tags=tags,
+        start_address=address,
+        )
+
+        graph_blob_url = upload_graph(
+            trace_id,
+            graph_html,
+        )
+
+        report_pdf = generate_pdf_report(
+            trace_id=trace_id,
+            address=address,
+            chain_id=chain_id,
+            edges=serialized_edges,
+            tags=tags,
+            table=table,
+            summary=summary,
+            risk=risk,
+            cross_chain=cross_chain,
+        )
+
+        report_blob_url = upload_report(
+            trace_id,
+            report_pdf,
+        )
+
+        alert = raise_alert(
+            address,
+            risk,
+            trace_id=trace_id,
+        )
+
+        if alert:
+           save_alert(
+            trace_id=trace_id,
+            address=address,
+            risk_level=risk["level"],
+            message=alert,
+        )
+
+        workspace_id = ensure_workspace(
             trace_id=trace_id,
             address=address,
             chain_id=chain_id,
@@ -235,174 +386,35 @@ def trace(
 
         return {
             "trace_id": trace_id,
-            "workspace_id": f"CT-{trace_id}",
+            "workspace_id": workspace_id,
             "address": address,
             "chain_id": chain_id,
             "chain": _chain_name(chain_id),
-            "edges": [],
-            "tags": [],
-            "table": [],
-            "summary": {
-                "chain": _chain_name(chain_id),
-                "address": address,
-                "nodes": 1,
-                "edges": 0,
-            },
+            "edges": serialized_edges,
+            "tags": tags,
+            "table": table,
+            "summary": summary,
             "risk": risk,
-            "cross_chain": [],
+            "cross_chain": cross_chain,
+            "artifacts": {
+                "evidence": evidence_blob_url,
+                "graph": graph_blob_url,
+                "report": report_blob_url,
+            },
         }
-
-    G = build_graph(edges)
-
-    tags = tag_all(
-        address,
-        edges,
-        chain_id=chain_id,
-    )
-
-    cross_chain = []
-
-    if check_cross_chain:
-        cross_chain = cross_chain_reuse_check(
-            address
-        )
-
-    risk = compute_risk(
-        address=address,
-        edges=edges,
-        tags=tags,
-        incoming_timestamps=incoming_timestamps,
-        cross_chain_results=cross_chain,
-        max_hops=max_hops,
-    )
-
-    table = investigation_table(G)
-
-    summary = investigation_summary(
-        G,
-        address=address,
-        chain_id=chain_id,
-        tags=tags,
-        risk=risk,
-        cross_chain=cross_chain,
-    )
-
-    serialized_edges = []
-
-    for edge in edges:
-        serialized = {
-            key: value
-            for key, value in edge.items()
-            if key != "_raw"
-        }
-
-        serialized["amount"] = _edge_amount(edge)
-        serialized_edges.append(serialized)
-
-    raw_records = []
-
-    for edge in edges:
-        raw = edge.get("_raw")
-
-        if raw is not None:
-            raw_records.append(raw)
-
-    evidence_core = {
-        "address": address,
-        "raw_records": raw_records,
-        "derived_edges": serialized_edges,
-    }
-
-    evidence_hash = compute_hash(evidence_core)
-
-    trace_id = save_trace(
-    address=address,
-    chain_id=chain_id,
-    summary=summary,
-    edges=serialized_edges,
-    risk=risk,
-    tags=tags,
-    evidence_hash=evidence_hash,
-    max_hops=max_hops,
-    )
-
-    evidence_blob_url = upload_evidence(
-        trace_id,
-        {
-            **evidence_core,
-            "sha256": evidence_hash,
-        },
-    )
-
-    graph_html = render_graph(
-    G,
-    tags=tags,
-    start_address=address,
-    )
-
-    graph_blob_url = upload_graph(
-        trace_id,
-        graph_html,
-    )
-
-    report_pdf = generate_pdf_report(
-        trace_id=trace_id,
-        address=address,
-        chain_id=chain_id,
-        edges=serialized_edges,
-        tags=tags,
-        table=table,
-        summary=summary,
-        risk=risk,
-        cross_chain=cross_chain,
-    )
-
-    report_blob_url = upload_report(
-        trace_id,
-        report_pdf,
-    )
-
-    alert = raise_alert(
-        address,
-        risk,
-        trace_id=trace_id,
-    )
-
-    if alert:
-       save_alert(
-        trace_id=trace_id,
-        address=address,
-        risk_level=risk["level"],
-        message=alert,
-    )
-
-    workspace_id = ensure_workspace(
-        trace_id=trace_id,
-        address=address,
-        chain_id=chain_id,
-        risk=risk,
-    )
-
-    return {
-        "trace_id": trace_id,
-        "workspace_id": workspace_id,
-        "address": address,
-        "chain_id": chain_id,
-        "chain": _chain_name(chain_id),
-        "edges": serialized_edges,
-        "tags": tags,
-        "table": table,
-        "summary": summary,
-        "risk": risk,
-        "cross_chain": cross_chain,
-        "artifacts": {
-            "evidence": evidence_blob_url,
-            "graph": graph_blob_url,
-            "report": report_blob_url,
-        },
-    }
-    
-
+        
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        print("\n========== CITRUS TRACE CRASH ==========")
+        print(f"address={address}")
+        print(f"chain_id={chain_id}")
+        print(f"max_hops={max_hops}")
+        print(f"error={repr(exc)}")
+        traceback.print_exc()
+        print("========== END CITRUS TRACE CRASH ==========\n")
+        raise
 
 @app.post("/ingest-complaint")
 def ingest_complaint(address: str):
