@@ -1127,7 +1127,6 @@ def cross_chain_reuse_check(
 
             continue
 
-     -
 
         if cid in QUICKNODE_ENDPOINTS:
 
