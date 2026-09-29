@@ -21,6 +21,17 @@ QUICKNODE_ENDPOINTS = {
     56: os.getenv("QUICKNODE_BSC_URL"),
 }
 
+print(
+    "[tracer] provider config:",
+    {
+        "etherscan": bool(ETHERSCAN_API_KEY),
+        "alchemy": bool(ALCHEMY_API_KEY),
+        "goldrush": bool(GOLDRUSH_API_KEY),
+        "quicknode_bsc": bool(
+            QUICKNODE_ENDPOINTS.get(56)
+        ),
+    },
+)
 
 GOLDRUSH_CHAINS = {
     1: "eth-mainnet",
@@ -1569,6 +1580,15 @@ def cross_chain_reuse_check(
     primary_chain_id=1,
     other_chains=None,
 ):
+    print(
+    "[cross-chain] provider order:",
+    {
+        cid: _provider_order(cid)
+        for cid in SUPPORTED_CHAINS
+        if cid != primary_chain_id
+    },
+    )
+    
     address = address.lower()
 
     if other_chains is None:
