@@ -257,8 +257,7 @@ def trace(
 
     if check_cross_chain:
         cross_chain = cross_chain_reuse_check(
-            address,
-            current_chain_id=chain_id,
+            address
         )
 
     risk = compute_risk(
