@@ -6,6 +6,12 @@ from datetime import datetime
 
 from config import BASE_URL, SUPPORTED_CHAINS
 
+ETHERSCAN_TIMEOUT = float(os.getenv("ETHERSCAN_TIMEOUT", "10"))
+GOLDRUSH_TIMEOUT = float(os.getenv("GOLDRUSH_TIMEOUT", "3"))
+ALCHEMY_TIMEOUT = float(os.getenv("ALCHEMY_TIMEOUT", "5"))
+QUICKNODE_TIMEOUT = float(os.getenv("QUICKNODE_TIMEOUT", "5"))
+GOLDRUSH_COOLDOWN = float(os.getenv("GOLDRUSH_COOLDOWN", "30"))
+
 _goldrush_disabled_until = 0.0
 _goldrush_lock = threading.Lock()
 
@@ -324,7 +330,7 @@ def _alchemy_rpc(
         response = requests.post(
             url,
             json=payload,
-            timeout=QUICKNODE_TIMEOUT,
+            timeout=ALCHEMY_TIMEOUT,
         )
 
         response.raise_for_status()
