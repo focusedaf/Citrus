@@ -105,11 +105,15 @@ def upload_evidence(
 
 def upload_graph(
     trace_id: int,
-    graph_path: str,
+    graph_html,
 ) -> str:
-    """Upload a generated investigation graph."""
-    return upload_file(
-        local_path=graph_path,
+    """Upload a generated investigation graph directly to Vercel Blob."""
+
+    if isinstance(graph_html, str):
+        graph_html = graph_html.encode("utf-8")
+
+    return upload_bytes(
+        data=graph_html,
         blob_path=f"citrus/graphs/graph_{trace_id}.html",
         content_type="text/html",
     )
