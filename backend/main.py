@@ -297,6 +297,8 @@ def trace(
 
     print(f"[DB] Trace saved successfully. trace_id={trace_id}")
 
+    print("[DEBUG] Starting evidence Blob upload")
+
     evidence_path, _ = save_evidence(
         trace_id,
         address,
@@ -319,7 +321,10 @@ def trace(
 
     print(f"[EVIDENCE] Uploaded to Blob: {evidence_blob_url}")
 
-   
+    print(f"[DEBUG] Evidence Blob upload successful: {evidence_blob_url}")
+
+    print("[DEBUG] Starting graph Blob upload")
+
     graph_path = render_graph(
         G,
         tags=tags,
@@ -334,6 +339,10 @@ def trace(
 
     print(f"[GRAPH] Uploaded to Blob: {graph_blob_url}")
 
+    print(f"[DEBUG] Graph Blob upload successful: {graph_blob_url}")
+
+    print("[DEBUG] Starting report Blob upload")
+
     report_path = generate_pdf_report(
         summary,
         risk,
@@ -342,6 +351,8 @@ def trace(
     )
 
     print(f"[REPORT] PDF generated: {report_path}")
+
+    print(f"[DEBUG] Report Blob upload successful: {report_blob_url}")
 
     report_blob_url = upload_report(
     trace_id,
