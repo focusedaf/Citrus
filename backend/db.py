@@ -170,7 +170,7 @@ def init_db():
             cur.close()
 
 
-def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None, tags=None):
+def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None, tags=None,  max_hops=None):
     with get_connection() as conn:
         cur = conn.cursor()
 
