@@ -1,31 +1,21 @@
-import os
+import io
 import time
 from fpdf import FPDF
-from config import REPORTS_DIR
 
 
 def _safe_text(value):
-
-    return (
-        str(value)
-        .encode("latin-1", errors="replace")
-        .decode("latin-1")
-    )
+    return str(value).encode("latin-1", errors="replace").decode("latin-1")
 
 
 def _as_text(value):
-
     if value is None:
         return "None detected"
-
     if isinstance(value, list):
         if not value:
             return "None detected"
         return ", ".join(str(x) for x in value)
-
     if isinstance(value, dict):
         return ", ".join(f"{k}: {v}" for k, v in value.items())
-
     return str(value)
 
 
@@ -45,106 +35,43 @@ class InvestigationReport(FPDF):
         self.cell(
             0,
             6,
-            _safe_text(
-                f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-            ),
+            _safe_text(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}"),
             ln=True,
             align="C",
         )
-
         self.ln(4)
 
     def footer(self):
         self.set_y(-15)
-
         self.set_font("Helvetica", "", 8)
-
-        self.cell(
-            0,
-            10,
-            f"Page {self.page_no()}",
-            align="C",
-        )
+        self.cell(0, 10, f"Page {self.page_no()}", align="C")
 
     def section_title(self, title):
         self.set_font("Helvetica", "B", 12)
         self.set_fill_color(230, 230, 230)
-
-        self.cell(
-            0,
-            8,
-            _safe_text(title),
-            ln=True,
-            fill=True,
-        )
-
+        self.cell(0, 8, _safe_text(title), ln=True, fill=True)
         self.ln(2)
 
     def kv_row(self, key, value):
         self.set_font("Helvetica", "B", 10)
-
-        self.cell(
-            55,
-            7,
-            _safe_text(key),
-        )
-
+        self.cell(55, 7, _safe_text(key))
         self.set_font("Helvetica", "", 10)
-
-        self.multi_cell(
-            0,
-            7,
-            _safe_text(value),
-        )
+        self.multi_cell(0, 7, _safe_text(value))
 
     def bullet(self, text):
         self.set_font("Helvetica", "", 10)
-
-        self.multi_cell(
-            0,
-            6,
-            _safe_text(f"- {text}"),
-        )
+        self.multi_cell(0, 6, _safe_text(f"- {text}"))
 
 
 def generate_pdf_report(
     summary,
     risk,
     trace_id=None,
-    output_path=None,
     evidence=None,
 ):
-    
-    os.makedirs(REPORTS_DIR, exist_ok=True)
-
-    if output_path is None:
-
-        if trace_id is not None:
-            filename = f"report_{trace_id}.pdf"
-        else:
-            safe_addr = str(
-                summary.get("reported_address", "unknown")
-            )[:10]
-
-            filename = (
-                f"report_{safe_addr}_{int(time.time())}.pdf"
-            )
-
-        output_path = os.path.join(
-            REPORTS_DIR,
-            filename,
-        )
-
     pdf = InvestigationReport()
-
-    pdf.set_auto_page_break(
-        auto=True,
-        margin=20,
-    )
-
+    pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
-
-
 
     pdf.section_title("Case Overview")
 
@@ -185,8 +112,6 @@ def generate_pdf_report(
 
     pdf.ln(3)
 
-
-
     pdf.section_title(
         f"Risk Assessment - "
         f"{risk.get('label', 'Rule-Based Risk Indicator')}"
@@ -206,14 +131,8 @@ def generate_pdf_report(
 
     if reasons:
         pdf.ln(2)
-
         pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(
-            0,
-            7,
-            "Triggered Indicators:",
-            ln=True,
-        )
+        pdf.cell(0, 7, "Triggered Indicators:", ln=True)
 
         for reason in reasons:
             pdf.bullet(reason)
@@ -222,12 +141,9 @@ def generate_pdf_report(
 
     pdf.ln(3)
 
-
-
     metrics = risk.get("metrics", {})
 
     if metrics:
-
         pdf.section_title("Risk Metrics")
 
         metric_labels = {
@@ -241,12 +157,8 @@ def generate_pdf_report(
         }
 
         for key, label in metric_labels.items():
-
             if key in metrics:
-                pdf.kv_row(
-                    f"{label}:",
-                    str(metrics[key]),
-                )
+                pdf.kv_row(f"{label}:", str(metrics[key]))
 
         boolean_metrics = {
             "mixer_exposure": "Mixer Exposure",
@@ -259,7 +171,6 @@ def generate_pdf_report(
         }
 
         for key, label in boolean_metrics.items():
-
             if key in metrics:
                 pdf.kv_row(
                     f"{label}:",
@@ -268,14 +179,9 @@ def generate_pdf_report(
 
         pdf.ln(3)
 
-
-
     pdf.section_title("Entity Findings")
 
-    entity_findings = summary.get(
-        "entity_findings",
-        {},
-    )
+    entity_findings = summary.get("entity_findings", {})
 
     pdf.kv_row(
         "VASP:",
@@ -294,62 +200,38 @@ def generate_pdf_report(
 
     pdf.kv_row(
         "Known Contracts:",
-        _as_text(
-            entity_findings.get("known_contracts")
-        ),
+        _as_text(entity_findings.get("known_contracts")),
     )
 
     pdf.kv_row(
         "Unidentified Wallets:",
-        str(
-            entity_findings.get(
-                "unidentified_wallets",
-                0,
-            )
-        ),
+        str(entity_findings.get("unidentified_wallets", 0)),
     )
 
     pdf.ln(3)
 
-    pdf.section_title(
-        "Spoofed / Lookalike Tokens"
-    )
-
-    spoofed = summary.get(
-        "spoofed_tokens_detected"
-    )
+    pdf.section_title("Spoofed / Lookalike Tokens")
 
     pdf.bullet(
-        _as_text(spoofed)
+        _as_text(summary.get("spoofed_tokens_detected"))
     )
 
     pdf.ln(3)
 
-
-    pdf.section_title(
-        "Cross-Chain Activity"
-    )
-
-    cross_chain = summary.get(
-        "cross_chain_activity"
-    )
+    pdf.section_title("Cross-Chain Activity")
 
     pdf.bullet(
-        _as_text(cross_chain)
+        _as_text(summary.get("cross_chain_activity"))
     )
 
     pdf.ln(3)
-
 
     if evidence:
-
-        pdf.section_title(
-            "Evidence & Chain of Custody"
-        )
+        pdf.section_title("Evidence & Chain of Custody")
 
         pdf.kv_row(
             "Evidence bundle:",
-            os.path.basename(evidence.get("path", "N/A")) if evidence.get("path") else "N/A",
+            evidence.get("filename", "N/A"),
         )
 
         pdf.kv_row(
@@ -365,24 +247,15 @@ def generate_pdf_report(
                 "This hash covers the raw source-API records and derived "
                 "transaction edges this report was built from. Re-hashing "
                 "the stored evidence bundle and comparing it against this "
-                "value will detect any modification made after generation. "
-                "Verify via the /evidence/{trace_id}/verify endpoint."
+                "value will detect any modification made after generation."
             ),
         )
 
         pdf.ln(3)
 
+    pdf.section_title("Investigation Disclaimer")
 
-    pdf.section_title(
-        "Investigation Disclaimer"
-    )
-
-    pdf.set_font(
-        "Helvetica",
-        "I",
-        8,
-    )
-
+    pdf.set_font("Helvetica", "I", 8)
     pdf.multi_cell(
         0,
         5,
@@ -395,6 +268,5 @@ def generate_pdf_report(
         ),
     )
 
-    pdf.output(output_path)
-
-    return output_path
+    output = pdf.output(dest="S")
+    return output.encode("latin-1")

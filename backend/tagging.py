@@ -1,7 +1,9 @@
 import json
 import os
 import requests
+
 from config import BASE_URL, LABELS_FILE, ENABLE_CONTRACT_PROBING
+
 
 KNOWN_VASPS = {
     "0x28c6c06298d514db089934071355e5743bf21d60": ("exchange", "Binance 14"),
@@ -11,33 +13,79 @@ KNOWN_VASPS = {
     "0xae5dde433888a7456c3e0aecbb2e0a5748cbc1eb": ("exchange", "OKX Deposit"),
 }
 
+
 KNOWN_BRIDGES = {
-    "0x98f3c9e6e3face36baad05fe09d375ef1464288b": ("cross_chain_bridge", "Wormhole Core"),
-    "0x3ee18b2214aff97000d974cf647e7c347e8fa585": ("cross_chain_bridge", "Wormhole Token Bridge"),
-    "0x77b2043768d28e9c9ab44e1abfc95944bce57931": ("liquidity_bridge", "Stargate Native Pool"),
-    "0xc026395860db2d07ee33e05fe50ed7bd583189c7": ("liquidity_bridge", "Stargate USDC Pool"),
-    "0x933597a323eb81cae705c5bc29985172fd5a3973": ("liquidity_bridge", "Stargate USDT Pool"),
+    "0x98f3c9e6e3face36baad05fe09d375ef1464288b": (
+        "cross_chain_bridge",
+        "Wormhole Core",
+    ),
+    "0x3ee18b2214aff97000d974cf647e7c347e8fa585": (
+        "cross_chain_bridge",
+        "Wormhole Token Bridge",
+    ),
+    "0x77b2043768d28e9c9ab44e1abfc95944bce57931": (
+        "liquidity_bridge",
+        "Stargate Native Pool",
+    ),
+    "0xc026395860db2d07ee33e05fe50ed7bd583189c7": (
+        "liquidity_bridge",
+        "Stargate USDC Pool",
+    ),
+    "0x933597a323eb81cae705c5bc29985172fd5a3973": (
+        "liquidity_bridge",
+        "Stargate USDT Pool",
+    ),
 }
 
-# Real, verified Tornado Cash ETH pool contract addresses (Ethereum mainnet).
+
 KNOWN_MIXERS = {
-    "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc": ("tumbler", "Tornado Cash: 0.1 ETH"),
-    "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936": ("tumbler", "Tornado Cash: 1 ETH"),
-    "0x910cbd523d972eb0a6f4cae4618ad62622b39dbf": ("tumbler", "Tornado Cash: 10 ETH"),
-    "0xa160cdab225685da1d56aa342ad8841c3b53f291": ("tumbler", "Tornado Cash: 100 ETH"),
-    "0xd90e2f925da726b50c4ed8d0fb90ad053324f31b": ("tumbler", "Tornado Cash: Router"),
+    "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc": (
+        "tumbler",
+        "Tornado Cash: 0.1 ETH",
+    ),
+    "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936": (
+        "tumbler",
+        "Tornado Cash: 1 ETH",
+    ),
+    "0x910cbd523d972eb0a6f4cae4618ad62622b39dbf": (
+        "tumbler",
+        "Tornado Cash: 10 ETH",
+    ),
+    "0xa160cdab225685da1d56aa342ad8841c3b53f291": (
+        "tumbler",
+        "Tornado Cash: 100 ETH",
+    ),
+    "0xd90e2f925da726b50c4ed8d0fb90ad053324f31b": (
+        "tumbler",
+        "Tornado Cash: Router",
+    ),
 }
 
-# Infrastructure contracts - NOT wallets and NOT VASPs.
+
 KNOWN_CONTRACTS = {
-    "0xdac17f958d2ee523a2206206994597c13d831ec7": ("token_contract", "USDT Token Contract"),
-    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": ("token_contract", "USDC Token Contract"),
-    "0x6b175474e89094c44da98b954eedeac495271d0f": ("token_contract", "DAI Token Contract"),
-    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": ("token_contract", "WETH Token Contract"),
-    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": ("dex_router", "Uniswap V2 Router"),
+    "0xdac17f958d2ee523a2206206994597c13d831ec7": (
+        "token_contract",
+        "USDT Token Contract",
+    ),
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": (
+        "token_contract",
+        "USDC Token Contract",
+    ),
+    "0x6b175474e89094c44da98b954eedeac495271d0f": (
+        "token_contract",
+        "DAI Token Contract",
+    ),
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": (
+        "token_contract",
+        "WETH Token Contract",
+    ),
+    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": (
+        "dex_router",
+        "Uniswap V2 Router",
+    ),
 }
 
-# Decoded-function-name keyword heuristics (Etherscan returns `functionName`for verified contracts). These flag *likely* DeFi/bridge interactions even when the address itself isn't in any dict above. Always heuristic/unverified — never presented as a confirmed identification.
+
 DEFI_FUNCTION_KEYWORDS = {
     "swap": ("dex_router", "Possible DEX/swap contract"),
     "addliquidity": ("dex_lp", "Possible liquidity pool interaction"),
@@ -57,21 +105,33 @@ DEFI_FUNCTION_KEYWORDS = {
 
 
 def _load_external_labels():
-   
-    empty = {"vasp": {}, "bridge": {}, "mixer": {}, "contract": {}}
+    empty = {
+        "vasp": {},
+        "bridge": {},
+        "mixer": {},
+        "contract": {},
+    }
+
     if not LABELS_FILE or not os.path.exists(LABELS_FILE):
         return empty
+
     try:
         with open(LABELS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        for k in empty:
-            empty[k] = {
-                addr.lower(): label
-                for addr, label in (data.get(k) or {}).items()
+
+        for key in empty:
+            empty[key] = {
+                address.lower(): label
+                for address, label in (data.get(key) or {}).items()
             }
+
         return empty
+
     except (json.JSONDecodeError, OSError) as exc:
-        print(f"[tagging] failed to load LABELS_FILE ({LABELS_FILE}): {exc}")
+        print(
+            f"[tagging] failed to load LABELS_FILE "
+            f"({LABELS_FILE}): {exc}"
+        )
         return empty
 
 
@@ -79,40 +139,87 @@ _EXTERNAL_LABELS = _load_external_labels()
 
 
 def tag_address(address):
-    
     addr = address.lower()
 
     if addr in KNOWN_VASPS:
         subtype, label = KNOWN_VASPS[addr]
-        return {"entity_type": "vasp", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+
+        return {
+            "entity_type": "vasp",
+            "entity_subtype": subtype,
+            "label": label,
+            "confidence": "confirmed",
+        }
+
     if addr in _EXTERNAL_LABELS["vasp"]:
-        return {"entity_type": "vasp", "entity_subtype": "exchange", "label": _EXTERNAL_LABELS["vasp"][addr], "confidence": "confirmed"}
+        return {
+            "entity_type": "vasp",
+            "entity_subtype": "exchange",
+            "label": _EXTERNAL_LABELS["vasp"][addr],
+            "confidence": "confirmed",
+        }
 
     if addr in KNOWN_BRIDGES:
         subtype, label = KNOWN_BRIDGES[addr]
-        return {"entity_type": "bridge", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+
+        return {
+            "entity_type": "bridge",
+            "entity_subtype": subtype,
+            "label": label,
+            "confidence": "confirmed",
+        }
+
     if addr in _EXTERNAL_LABELS["bridge"]:
-        return {"entity_type": "bridge", "entity_subtype": "cross_chain_bridge", "label": _EXTERNAL_LABELS["bridge"][addr], "confidence": "confirmed"}
+        return {
+            "entity_type": "bridge",
+            "entity_subtype": "cross_chain_bridge",
+            "label": _EXTERNAL_LABELS["bridge"][addr],
+            "confidence": "confirmed",
+        }
 
     if addr in KNOWN_MIXERS:
         subtype, label = KNOWN_MIXERS[addr]
-        return {"entity_type": "mixer", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+
+        return {
+            "entity_type": "mixer",
+            "entity_subtype": subtype,
+            "label": label,
+            "confidence": "confirmed",
+        }
+
     if addr in _EXTERNAL_LABELS["mixer"]:
-        return {"entity_type": "mixer", "entity_subtype": "tumbler", "label": _EXTERNAL_LABELS["mixer"][addr], "confidence": "confirmed"}
+        return {
+            "entity_type": "mixer",
+            "entity_subtype": "tumbler",
+            "label": _EXTERNAL_LABELS["mixer"][addr],
+            "confidence": "confirmed",
+        }
 
     if addr in KNOWN_CONTRACTS:
         subtype, label = KNOWN_CONTRACTS[addr]
-        return {"entity_type": "contract", "entity_subtype": subtype, "label": label, "confidence": "confirmed"}
+
+        return {
+            "entity_type": "contract",
+            "entity_subtype": subtype,
+            "label": label,
+            "confidence": "confirmed",
+        }
+
     if addr in _EXTERNAL_LABELS["contract"]:
-        return {"entity_type": "contract", "entity_subtype": "contract", "label": _EXTERNAL_LABELS["contract"][addr], "confidence": "confirmed"}
+        return {
+            "entity_type": "contract",
+            "entity_subtype": "contract",
+            "label": _EXTERNAL_LABELS["contract"][addr],
+            "confidence": "confirmed",
+        }
 
     return None
 
 
 def _heuristic_tag_from_functions(function_names):
-   
     for fn in function_names:
         fn_lower = (fn or "").lower()
+
         for keyword, (subtype, label) in DEFI_FUNCTION_KEYWORDS.items():
             if keyword in fn_lower:
                 return {
@@ -121,74 +228,326 @@ def _heuristic_tag_from_functions(function_names):
                     "label": f"{label} (fn: {fn})",
                     "confidence": "heuristic",
                 }
+
     return None
 
 
 _CODE_CACHE = {}
 
 
-def _eth_get_code(address, api_key, chain_id):
-   
-    key = (address.lower(), chain_id)
-    if key in _CODE_CACHE:
-        return _CODE_CACHE[key]
+def _eth_get_code_etherscan(address, api_key, chain_id):
+    if not api_key:
+        return None
 
     url = (
-        f"{BASE_URL}?chainid={chain_id}&module=proxy&action=eth_getCode"
-        f"&address={address}&tag=latest&apikey={api_key}"
+        f"{BASE_URL}?chainid={chain_id}"
+        f"&module=proxy"
+        f"&action=eth_getCode"
+        f"&address={address}"
+        f"&tag=latest"
+        f"&apikey={api_key}"
     )
+
     try:
-        resp = requests.get(url, timeout=10).json()
-        code = resp.get("result", "0x")
-        is_contract = bool(code) and code != "0x"
-    except (requests.RequestException, ValueError) as exc:
-        print(f"[tagging] eth_getCode failed for {address}: {exc}")
-        is_contract = None
+        response = requests.get(
+            url,
+            timeout=10,
+        )
 
-    _CODE_CACHE[key] = is_contract
-    return is_contract
+        response.raise_for_status()
 
+        data = response.json()
 
-def tag_address_heuristic(address, function_names=None, api_key=None, chain_id=1):
-   
-    tag = tag_address(address)
-    if tag:
-        return tag
+        if data.get("result") is not None:
+            code = data.get("result", "0x")
 
-    if function_names:
-        tag = _heuristic_tag_from_functions(function_names)
-        if tag:
-            return tag
+            return bool(
+                code
+                and code != "0x"
+                and code != "0x0"
+            )
 
-    if api_key and ENABLE_CONTRACT_PROBING:
-        is_contract = _eth_get_code(address, api_key, chain_id)
-        if is_contract is True:
-            return {
-                "entity_type": "contract",
-                "entity_subtype": "unverified_contract",
-                "label": "Unidentified contract (unlabeled)",
-                "confidence": "heuristic",
-            }
+    except (
+        requests.RequestException,
+        ValueError,
+    ) as exc:
+        print(
+            f"[tagging] Etherscan eth_getCode failed "
+            f"for {address}: {exc}"
+        )
 
     return None
 
 
-def tag_all(addresses, edges=None, api_key=None, chain_id=1):
-   
+def _eth_get_code_alchemy(address, chain_id):
+    api_key = os.getenv("ALCHEMY_API_KEY")
+
+    if not api_key:
+        return None
+
+    alchemy_networks = {
+        1: "eth-mainnet",
+        137: "polygon-mainnet",
+        42161: "arb-mainnet",
+        10: "opt-mainnet",
+    }
+
+    network = alchemy_networks.get(chain_id)
+
+    if not network:
+        return None
+
+    url = (
+        f"https://{network}.g.alchemy.com/v2/"
+        f"{api_key}"
+    )
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getCode",
+        "params": [
+            address,
+            "latest",
+        ],
+    }
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=10,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if "result" in data:
+            code = data.get("result", "0x")
+
+            return bool(
+                code
+                and code != "0x"
+                and code != "0x0"
+            )
+
+    except (
+        requests.RequestException,
+        ValueError,
+    ) as exc:
+        print(
+            f"[tagging] Alchemy eth_getCode failed "
+            f"for {address}: {exc}"
+        )
+
+    return None
+
+
+def _eth_get_code_goldrush(address, chain_id):
+    api_key = os.getenv("GOLDRUSH_API_KEY")
+
+    if not api_key:
+        return None
+
+    print(
+        f"[tagging] GoldRush eth_getCode not available "
+        f"for chain {chain_id}; continuing cascade"
+    )
+
+    return None
+
+
+def _eth_get_code_quicknode(address, chain_id):
+    if chain_id != 56:
+        return None
+
+    endpoint = os.getenv("QUICKNODE_BSC_URL")
+
+    if not endpoint:
+        return None
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getCode",
+        "params": [
+            address,
+            "latest",
+        ],
+    }
+
+    try:
+        response = requests.post(
+            endpoint,
+            json=payload,
+            timeout=10,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if "result" in data:
+            code = data.get("result", "0x")
+
+            return bool(
+                code
+                and code != "0x"
+                and code != "0x0"
+            )
+
+    except (
+        requests.RequestException,
+        ValueError,
+    ) as exc:
+        print(
+            f"[tagging] QuickNode eth_getCode failed "
+            f"for {address}: {exc}"
+        )
+
+    return None
+
+
+def _get_code_waterfall(address, chain_id, api_key=None):
+    cache_key = (
+        address.lower(),
+        chain_id,
+    )
+
+    if cache_key in _CODE_CACHE:
+        return _CODE_CACHE[cache_key]
+
+    providers = [
+        (
+            "Etherscan",
+            lambda: _eth_get_code_etherscan(
+                address,
+                api_key,
+                chain_id,
+            ),
+        ),
+        (
+            "Alchemy",
+            lambda: _eth_get_code_alchemy(
+                address,
+                chain_id,
+            ),
+        ),
+        (
+            "GoldRush",
+            lambda: _eth_get_code_goldrush(
+                address,
+                chain_id,
+            ),
+        ),
+        (
+            "QuickNode",
+            lambda: _eth_get_code_quicknode(
+                address,
+                chain_id,
+            ),
+        ),
+    ]
+
+    for provider_name, provider_call in providers:
+        result = provider_call()
+
+        if result is None:
+            print(
+                f"[tagging] {provider_name} unavailable "
+                f"for chain {chain_id}"
+            )
+            continue
+
+        print(
+            f"[tagging] {provider_name} eth_getCode "
+            f"checked chain {chain_id}"
+        )
+
+        _CODE_CACHE[cache_key] = result
+
+        return result
+
+    _CODE_CACHE[cache_key] = None
+
+    return None
+
+
+def tag_address_heuristic(
+    address,
+    function_names=None,
+    api_key=None,
+    chain_id=1,
+):
+    tag = tag_address(address)
+
+    if tag:
+        return tag
+
+    if function_names:
+        tag = _heuristic_tag_from_functions(
+            function_names
+        )
+
+        if tag:
+            return tag
+
+    if api_key or os.getenv("ALCHEMY_API_KEY") or os.getenv(
+        "GOLDRUSH_API_KEY"
+    ) or os.getenv("QUICKNODE_BSC_URL"):
+
+        if ENABLE_CONTRACT_PROBING:
+            is_contract = _get_code_waterfall(
+                address,
+                chain_id,
+                api_key=api_key,
+            )
+
+            if is_contract is True:
+                return {
+                    "entity_type": "contract",
+                    "entity_subtype": "unverified_contract",
+                    "label": "Unidentified contract (unlabeled)",
+                    "confidence": "heuristic",
+                }
+
+            if is_contract is False:
+                return None
+
+    return None
+
+
+def tag_all(
+    addresses,
+    edges=None,
+    api_key=None,
+    chain_id=1,
+):
     edges = edges or []
+
     fn_by_address = {}
-    for e in edges:
-        fn = e.get("function_name")
-        to_addr = e.get("to")
-        if fn and to_addr:
-            fn_by_address.setdefault(to_addr.lower(), []).append(fn)
+
+    for edge in edges:
+        function_name = edge.get("function_name")
+        to_address = edge.get("to")
+
+        if function_name and to_address:
+            fn_by_address.setdefault(
+                to_address.lower(),
+                [],
+            ).append(function_name)
 
     tags = {}
-    for addr in addresses:
-        tags[addr] = tag_address_heuristic(
-            addr,
-            function_names=fn_by_address.get(addr.lower()),
+
+    for address in addresses:
+        tags[address] = tag_address_heuristic(
+            address,
+            function_names=fn_by_address.get(
+                address.lower()
+            ),
             api_key=api_key,
             chain_id=chain_id,
         )
+
     return tags
