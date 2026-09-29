@@ -589,10 +589,18 @@ def investigation_table(G):
 
     return rows
 
-
-def investigation_summary(G):
+def investigation_summary(
+    G,
+    address=None,
+    chain_id=None,
+    tags=None,
+    risk=None,
+    cross_chain=None,
+):
     if G.number_of_nodes() == 0:
         return {
+            "address": address,
+            "chain_id": chain_id,
             "nodes": 0,
             "edges": 0,
             "wallets": 0,
@@ -600,6 +608,8 @@ def investigation_summary(G):
             "exchanges": 0,
             "bridges": 0,
             "total_value": 0.0,
+            "risk": risk or {},
+            "cross_chain": cross_chain or [],
         }
 
     stats = _compute_stats(G)
@@ -622,6 +632,8 @@ def investigation_summary(G):
             wallets += 1
 
     return {
+        "address": address,
+        "chain_id": chain_id,
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
         "wallets": wallets,
@@ -629,4 +641,6 @@ def investigation_summary(G):
         "exchanges": exchanges,
         "bridges": bridges,
         "total_value": stats["total_value"],
+        "risk": risk or {},
+        "cross_chain": cross_chain or [],
     }
