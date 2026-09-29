@@ -30,17 +30,14 @@ async def get_blob(blob_path: str):
     client = AsyncBlobClient()
     return await client.get(blob_path, access="private",token=os.getenv("BLOB_READ_WRITE_TOKEN"),)
 
-def upload_bytes(
-    data: bytes,
-    blob_path: str,
-    content_type: str,
-) -> str:
-    """
-    Upload bytes to Vercel Blob.
+def upload_bytes(data: bytes, blob_path: str, content_type: str) -> str:
+    print(f"[BLOB UPLOAD] Starting: {blob_path}")
+    print(f"[BLOB UPLOAD] Size: {len(data)} bytes")
+    print(f"[BLOB UPLOAD] Token present: {bool(os.getenv('BLOB_READ_WRITE_TOKEN'))}")
 
-    Returns the Blob URL.
-    """
     client = get_blob_client()
+
+    print("[BLOB UPLOAD] Client created")
 
     result = client.put(
         blob_path,
@@ -49,11 +46,14 @@ def upload_bytes(
         content_type=content_type,
         add_random_suffix=False,
         overwrite=True,
+        token=os.getenv("BLOB_READ_WRITE_TOKEN"),
     )
 
+    print(f"[BLOB UPLOAD] PUT returned: {result}")
+    print(f"[BLOB UPLOAD] URL: {result.url}")
+
     return result.url
-
-
+    
 def upload_file(
     local_path: str,
     blob_path: str,
