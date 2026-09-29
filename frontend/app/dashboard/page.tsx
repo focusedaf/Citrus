@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -23,6 +24,7 @@ import {
   ShieldAlertIcon,
   TrendingUpIcon,
 } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -50,173 +52,503 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { RiskBadge, StatusBadge, MemberStack } from "@/components/custom/bits";
-import { TREND } from "@/lib/mock-data";
+
+import {
+  RiskBadge,
+  StatusBadge,
+  MemberStack,
+} from "@/components/custom/bits";
+
+import { getDashboardStats } from "@/lib/api";
+
 import { fmtTime, inr } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const trendCfg = {
-  critical: { label: "Critical", color: "#ef4444" },
-  high: { label: "High", color: "#f97316" },
-  medium: { label: "Medium", color: "#eab308" },
-  low: { label: "Low", color: "#22c55e" },
+  critical: {
+    label: "Critical",
+    color: "#ef4444",
+  },
+  high: {
+    label: "High",
+    color: "#f97316",
+  },
+  medium: {
+    label: "Medium",
+    color: "#eab308",
+  },
+  low: {
+    label: "Low",
+    color: "#22c55e",
+  },
 } satisfies ChartConfig;
+
+type DashboardStats = {
+  active_cases: number;
+  total_workspaces: number;
+  critical_cases: number;
+  funds_traced_inr: number;
+  vasps_identified: number;
+  open_alerts: number;
+
+  entity_counts: {
+    vasp: number;
+    mixer: number;
+    bridge: number;
+    contract: number;
+    unknown: number;
+  };
+
+  top_exchanges: {
+    name: string;
+    hits: number;
+  }[];
+};
+
+const emptyStats: DashboardStats = {
+  active_cases: 0,
+  total_workspaces: 0,
+  critical_cases: 0,
+  funds_traced_inr: 0,
+  vasps_identified: 0,
+  open_alerts: 0,
+
+  entity_counts: {
+    vasp: 0,
+    mixer: 0,
+    bridge: 0,
+    contract: 0,
+    unknown: 0,
+  },
+
+  top_exchanges: [],
+};
+
+function normalizeRiskLevel(
+  level: string | undefined,
+): "critical" | "high" | "medium" | "low" {
+  const value = (level ?? "").toLowerCase();
+
+  if (value.includes("critical")) return "critical";
+  if (value.includes("high")) return "high";
+  if (value.includes("medium")) return "medium";
+
+  return "low";
+}
+
+function formatTrendDate(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleDateString(
+    "en-IN",
+    {
+      day: "numeric",
+      month: "short",
+    },
+  );
+}
 
 export default function DashboardPage() {
   const { state, dispatch } = useStore();
+
   const { workspaces, alerts } = state;
 
-  const active = workspaces.filter((w) => w.status !== "Closed");
-  const openAlerts = alerts.filter((a) => !a.acknowledged);
-  const traced = workspaces.reduce((s, w) => s + w.amountInr, 0);
-  const vaspSet = new Set(workspaces.flatMap((w) => w.summary.vasps));
-  const critical = workspaces.filter(
-    (w) => w.riskLevel === "Critical" && w.status !== "Closed",
-  ).length;
+  const [stats, setStats] =
+    React.useState<DashboardStats>(emptyStats);
 
-  // funds by destination entity type
-  const entityCounts = ["vasp", "mixer", "bridge", "contract", "unknown"].map(
-    (t) => ({
-      type: t,
-      count: workspaces.reduce(
-        (s, w) => s + w.nodes.filter((n) => n.type === t).length,
-        0,
-      ),
-    }),
+  const [loadingStats, setLoadingStats] =
+    React.useState(true);
+
+  const [statsError, setStatsError] =
+    React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadDashboardStats() {
+      try {
+        setLoadingStats(true);
+        setStatsError(null);
+
+        const data =
+          (await getDashboardStats(30)) as DashboardStats;
+
+        if (!cancelled) {
+          setStats(data);
+        }
+      } catch (error) {
+        console.error(
+          "Failed to load dashboard statistics:",
+          error,
+        );
+
+        if (!cancelled) {
+          setStatsError(
+            error instanceof Error
+              ? error.message
+              : "Failed to load dashboard statistics",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingStats(false);
+        }
+      }
+    }
+
+    loadDashboardStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const active = workspaces.filter(
+    (w) => w.status !== "Closed",
   );
+
+  const openAlerts = alerts.filter(
+    (a) => !a.acknowledged,
+  );
+
+  /*
+   * Build the risk trend entirely on the frontend.
+   *
+   * No backend changes are required.
+   * Workspace creation timestamps are grouped by day
+   * and separated according to their risk level.
+   */
+  const trendData = React.useMemo(() => {
+    const today = new Date();
+
+    today.setHours(0, 0, 0, 0);
+
+    const days = Array.from(
+      { length: 30 },
+      (_, index) => {
+        const date = new Date(today);
+
+        date.setDate(
+          today.getDate() - (29 - index),
+        );
+
+        return date;
+      },
+    );
+
+    const grouped = new Map<
+      string,
+      {
+        date: string;
+        critical: number;
+        high: number;
+        medium: number;
+        low: number;
+      }
+    >();
+
+    days.forEach((date) => {
+      const key = date.toISOString().slice(0, 10);
+
+      grouped.set(key, {
+        date: key,
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      });
+    });
+
+    workspaces.forEach((workspace) => {
+      if (!workspace.createdAt) return;
+
+      const date = new Date(
+        workspace.createdAt * 1000,
+      );
+
+      const key = date.toISOString().slice(0, 10);
+
+      const day = grouped.get(key);
+
+      if (!day) return;
+
+      const risk = normalizeRiskLevel(
+        workspace.riskLevel,
+      );
+
+      day[risk] += 1;
+    });
+
+    return Array.from(grouped.values());
+  }, [workspaces]);
+
+  const entityCounts = [
+    {
+      type: "vasp",
+      count: stats.entity_counts.vasp,
+    },
+    {
+      type: "mixer",
+      count: stats.entity_counts.mixer,
+    },
+    {
+      type: "bridge",
+      count: stats.entity_counts.bridge,
+    },
+    {
+      type: "contract",
+      count: stats.entity_counts.contract,
+    },
+    {
+      type: "unknown",
+      count: stats.entity_counts.unknown,
+    },
+  ];
+
   const entityCfg = {
-    count: { label: "Addresses" },
-    vasp: { label: "Exchange / VASP", color: "#ef4444" },
-    mixer: { label: "Mixer", color: "#a855f7" },
-    bridge: { label: "Bridge", color: "#f59e0b" },
-    contract: { label: "Contract", color: "#94a3b8" },
-    unknown: { label: "Unidentified", color: "#3b82f6" },
+    count: {
+      label: "Addresses",
+    },
+
+    vasp: {
+      label: "Exchange / VASP",
+      color: "#ef4444",
+    },
+
+    mixer: {
+      label: "Mixer",
+      color: "#a855f7",
+    },
+
+    bridge: {
+      label: "Bridge",
+      color: "#f59e0b",
+    },
+
+    contract: {
+      label: "Contract",
+      color: "#94a3b8",
+    },
+
+    unknown: {
+      label: "Unidentified",
+      color: "#3b82f6",
+    },
   } satisfies ChartConfig;
 
-  // most-hit exchanges
-  const vaspHits: Record<string, number> = {};
-  workspaces.forEach((w) =>
-    w.nodes
-      .filter((n) => n.type === "vasp")
-      .forEach((n) => {
-        vaspHits[n.label] = (vaspHits[n.label] ?? 0) + 1;
-      }),
-  );
-  const vaspRows = Object.entries(vaspHits)
-    .map(([name, hits]) => ({ name, hits }))
-    .sort((a, b) => b.hits - a.hits)
+  const vaspRows = stats.top_exchanges
+    .map((exchange) => ({
+      name: exchange.name,
+      hits: exchange.hits,
+    }))
     .slice(0, 6);
 
   const kpis = [
     {
       label: "Active cases",
-      value: active.length,
+      value: stats.active_cases,
       icon: FolderOpenIcon,
-      note: `${workspaces.length} total workspaces`,
-      badge: "+2 this week",
+      note: `${stats.total_workspaces} total workspaces`,
+      badge: "Live backend",
     },
+
     {
       label: "Critical cases",
-      value: critical,
+      value: stats.critical_cases,
       icon: ShieldAlertIcon,
       note: "Score ≥ 75, needs action",
-      badge: `${openAlerts.length} open alerts`,
+      badge: `${stats.open_alerts} open alerts`,
       danger: true,
     },
+
     {
       label: "Funds traced",
-      value: inr(traced),
+      value: inr(stats.funds_traced_inr),
       icon: BanknoteIcon,
       note: "Across all complaints",
       badge: "NCRP linked",
     },
+
     {
       label: "VASPs identified",
-      value: vaspSet.size,
+      value: stats.vasps_identified,
       icon: BuildingIcon,
-      note: [...vaspSet].slice(0, 3).join(", ") || "—",
+      note:
+        stats.vasps_identified > 0
+          ? "Identified by backend attribution"
+          : "No VASPs identified",
       badge: "Freeze-ready",
     },
   ];
 
   return (
     <>
+      {statsError && (
+        <Card className="border-red-500/40">
+          <CardContent className="py-4">
+            <p className="text-sm text-red-400">
+              Dashboard statistics could not be loaded.
+            </p>
+
+            <p className="mt-1 text-xs text-muted-foreground">
+              {statsError}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 gap-4 *:data-[slot=card]:bg-linear-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
-        {kpis.map((k) => (
-          <Card key={k.label} className="@container/card">
-            <CardHeader>
-              <CardDescription>{k.label}</CardDescription>
-              <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-                {k.value}
-              </CardTitle>
-              <CardAction>
-                <Badge
-                  variant="outline"
-                  className={cn(k.danger && "border-red-500/40 text-red-400")}
-                >
-                  <k.icon />
-                  {k.badge}
-                </Badge>
-              </CardAction>
-            </CardHeader>
-            <CardFooter className="text-sm text-muted-foreground">
-              {k.note}
-            </CardFooter>
-          </Card>
-        ))}
+        {kpis.map((kpi) => {
+          const Icon = kpi.icon;
+
+          return (
+            <Card
+              key={kpi.label}
+              className="@container/card"
+            >
+              <CardHeader>
+                <CardDescription>
+                  {kpi.label}
+                </CardDescription>
+
+                <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+                  {loadingStats ? "—" : kpi.value}
+                </CardTitle>
+
+                <CardAction>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      kpi.danger &&
+                        "border-red-500/40 text-red-400",
+                    )}
+                  >
+                    <Icon />
+                    {kpi.badge}
+                  </Badge>
+                </CardAction>
+              </CardHeader>
+
+              <CardFooter className="text-sm text-muted-foreground">
+                {kpi.note}
+              </CardFooter>
+            </Card>
+          );
+        })}
       </div>
 
       <div className="grid gap-4 @4xl/main:grid-cols-3">
         <Card className="@4xl/main:col-span-2">
           <CardHeader>
-            <CardTitle>Traces by risk level</CardTitle>
+            <CardTitle>
+              Cases by risk level
+            </CardTitle>
+
             <CardDescription>
-              Complaints auto-traced per day, last 30 days
+              Workspace cases grouped by risk level over
+              the last 30 days
             </CardDescription>
+
             <CardAction>
               <Badge variant="outline">
                 <TrendingUpIcon />
-                +18% vs prev. 30d
+                30 day view
               </Badge>
             </CardAction>
           </CardHeader>
+
           <CardContent>
             <ChartContainer
               config={trendCfg}
               className="aspect-auto h-[260px] w-full"
             >
-              <AreaChart data={TREND}>
-                <CartesianGrid vertical={false} />
+              <AreaChart
+                data={trendData}
+                margin={{
+                  left: 8,
+                  right: 8,
+                  top: 8,
+                  bottom: 0,
+                }}
+              >
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="3 3"
+                />
+
                 <XAxis
                   dataKey="date"
                   tickLine={false}
                   axisLine={false}
                   tickMargin={8}
                   minTickGap={32}
-                  tickFormatter={(v) =>
-                    new Date(v).toLocaleDateString("en-IN", {
-                      day: "numeric",
-                      month: "short",
-                    })
+                  tickFormatter={(value) =>
+                    formatTrendDate(
+                      Math.floor(
+                        new Date(
+                          `${value}T00:00:00`,
+                        ).getTime() / 1000,
+                      ),
+                    )
                   }
                 />
+
+                <YAxis
+                  allowDecimals={false}
+                  tickLine={false}
+                  axisLine={false}
+                  width={32}
+                />
+
                 <ChartTooltip
                   cursor={false}
-                  content={<ChartTooltipContent indicator="dot" />}
+                  content={
+                    <ChartTooltipContent
+                      indicator="dot"
+                    />
+                  }
                 />
-                {(["low", "medium", "high", "critical"] as const).map((k) => (
-                  <Area
-                    key={k}
-                    dataKey={k}
-                    type="monotone"
-                    stackId="a"
-                    fill={`var(--color-${k})`}
-                    fillOpacity={0.5}
-                    stroke={`var(--color-${k})`}
-                  />
-                ))}
-                <ChartLegend content={<ChartLegendContent />} />
+
+                <Area
+                  dataKey="low"
+                  type="monotone"
+                  stackId="risk"
+                  fill="var(--color-low)"
+                  fillOpacity={0.45}
+                  stroke="var(--color-low)"
+                />
+
+                <Area
+                  dataKey="medium"
+                  type="monotone"
+                  stackId="risk"
+                  fill="var(--color-medium)"
+                  fillOpacity={0.45}
+                  stroke="var(--color-medium)"
+                />
+
+                <Area
+                  dataKey="high"
+                  type="monotone"
+                  stackId="risk"
+                  fill="var(--color-high)"
+                  fillOpacity={0.5}
+                  stroke="var(--color-high)"
+                />
+
+                <Area
+                  dataKey="critical"
+                  type="monotone"
+                  stackId="risk"
+                  fill="var(--color-critical)"
+                  fillOpacity={0.55}
+                  stroke="var(--color-critical)"
+                />
+
+                <ChartLegend
+                  content={
+                    <ChartLegendContent />
+                  }
+                />
               </AreaChart>
             </ChartContainer>
           </CardContent>
@@ -224,11 +556,15 @@ export default function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Where the money lands</CardTitle>
+            <CardTitle>
+              Where the money lands
+            </CardTitle>
+
             <CardDescription>
               Traced addresses by attributed entity
             </CardDescription>
           </CardHeader>
+
           <CardContent>
             <ChartContainer
               config={entityCfg}
@@ -236,8 +572,14 @@ export default function DashboardPage() {
             >
               <PieChart>
                 <ChartTooltip
-                  content={<ChartTooltipContent hideLabel nameKey="type" />}
+                  content={
+                    <ChartTooltipContent
+                      hideLabel
+                      nameKey="type"
+                    />
+                  }
                 />
+
                 <Pie
                   data={entityCounts}
                   dataKey="count"
@@ -245,11 +587,21 @@ export default function DashboardPage() {
                   innerRadius={55}
                   strokeWidth={2}
                 >
-                  {entityCounts.map((e) => (
-                    <Cell key={e.type} fill={`var(--color-${e.type})`} />
+                  {entityCounts.map((entity) => (
+                    <Cell
+                      key={entity.type}
+                      fill={`var(--color-${entity.type})`}
+                    />
                   ))}
                 </Pie>
-                <ChartLegend content={<ChartLegendContent nameKey="type" />} />
+
+                <ChartLegend
+                  content={
+                    <ChartLegendContent
+                      nameKey="type"
+                    />
+                  }
+                />
               </PieChart>
             </ChartContainer>
           </CardContent>
@@ -259,34 +611,70 @@ export default function DashboardPage() {
       <div className="grid gap-4 @4xl/main:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>Top exchanges hit</CardTitle>
-            <CardDescription>Freeze-request candidates</CardDescription>
+            <CardTitle>
+              Top exchanges hit
+            </CardTitle>
+
+            <CardDescription>
+              Freeze-request candidates
+            </CardDescription>
           </CardHeader>
+
           <CardContent>
-            <ChartContainer
-              config={{
-                hits: { label: "Deposit addresses", color: "#ef4444" },
-              }}
-              className="aspect-auto h-[210px] w-full"
-            >
-              <BarChart data={vaspRows} layout="vertical" margin={{ left: 0 }}>
-                <CartesianGrid horizontal={false} />
-                <YAxis
-                  dataKey="name"
-                  type="category"
-                  width={110}
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fontSize: 11 }}
-                />
-                <XAxis type="number" hide />
-                <ChartTooltip
-                  cursor={false}
-                  content={<ChartTooltipContent hideLabel />}
-                />
-                <Bar dataKey="hits" fill="var(--color-hits)" radius={4} />
-              </BarChart>
-            </ChartContainer>
+            {vaspRows.length > 0 ? (
+              <ChartContainer
+                config={{
+                  hits: {
+                    label: "Deposit addresses",
+                    color: "#ef4444",
+                  },
+                }}
+                className="aspect-auto h-[210px] w-full"
+              >
+                <BarChart
+                  data={vaspRows}
+                  layout="vertical"
+                  margin={{ left: 0 }}
+                >
+                  <CartesianGrid horizontal={false} />
+
+                  <YAxis
+                    dataKey="name"
+                    type="category"
+                    width={110}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 11 }}
+                  />
+
+                  <XAxis
+                    type="number"
+                    hide
+                  />
+
+                  <ChartTooltip
+                    cursor={false}
+                    content={
+                      <ChartTooltipContent
+                        hideLabel
+                      />
+                    }
+                  />
+
+                  <Bar
+                    dataKey="hits"
+                    fill="var(--color-hits)"
+                    radius={4}
+                  />
+                </BarChart>
+              </ChartContainer>
+            ) : (
+              <div className="flex h-[210px] items-center justify-center">
+                <p className="text-sm text-muted-foreground">
+                  No exchange attribution available.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -296,117 +684,201 @@ export default function DashboardPage() {
               <AlertTriangleIcon className="size-4 text-red-400" />
               Live alerts
             </CardTitle>
+
             <CardDescription>
               {openAlerts.length} unacknowledged
             </CardDescription>
+
             <CardAction>
               <Link
                 href="/alerts"
-                className={buttonVariants({ variant: "ghost", size: "sm" })}
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "sm",
+                })}
               >
-                View all <ArrowUpRightIcon />
+                View all
+                <ArrowUpRightIcon />
               </Link>
             </CardAction>
           </CardHeader>
+
           <CardContent className="flex flex-col divide-y">
-            {alerts.slice(0, 4).map((a) => (
+            {alerts.slice(0, 4).map((alert) => (
               <div
-                key={a.id}
+                key={alert.id}
                 className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0"
               >
-                <RiskBadge level={a.level} />
+                <RiskBadge
+                  level={alert.level}
+                />
+
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">{a.message}</p>
+                  <p className="truncate text-sm">
+                    {alert.message}
+                  </p>
+
                   <p className="text-xs text-muted-foreground">
                     <Link
-                      href={`/workspaces/${a.workspaceId}`}
+                      href={`/workspaces/${alert.workspaceId}`}
                       className="underline-offset-2 hover:underline"
                     >
-                      {a.workspaceId}
-                    </Link>{" "}
-                    · {fmtTime(a.at)}
+                      {alert.workspaceId}
+                    </Link>
+
+                    {" · "}
+
+                    {fmtTime(alert.at)}
                   </p>
                 </div>
-                {!a.acknowledged ? (
+
+                {!alert.acknowledged ? (
                   <Button
                     size="xs"
                     variant="outline"
-                    onClick={() => dispatch({ type: "ack", alertId: a.id })}
+                    onClick={() =>
+                      dispatch({
+                        type: "ack",
+                        alertId: alert.id,
+                      })
+                    }
                   >
                     Acknowledge
                   </Button>
                 ) : (
-                  <span className="text-xs text-muted-foreground">Ack’d</span>
+                  <span className="text-xs text-muted-foreground">
+                    Ack’d
+                  </span>
                 )}
               </div>
             ))}
+
+            {alerts.length === 0 && (
+              <div className="py-6 text-center text-sm text-muted-foreground">
+                No alerts available.
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Active workspaces</CardTitle>
+          <CardTitle>
+            Active workspaces
+          </CardTitle>
+
           <CardDescription>
-            Each workspace holds the trace graph, alerts, reports and team
-            discussion for one complaint
+            Each workspace holds the trace graph, alerts,
+            reports and team discussion for one complaint
           </CardDescription>
+
           <CardAction>
             <Link
               href="/workspaces"
-              className={buttonVariants({ variant: "outline", size: "sm" })}
+              className={buttonVariants({
+                variant: "outline",
+                size: "sm",
+              })}
             >
               All workspaces
             </Link>
           </CardAction>
         </CardHeader>
+
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Case</TableHead>
-                <TableHead>Risk</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Attribution</TableHead>
-                <TableHead>Team</TableHead>
+                <TableHead>
+                  Case
+                </TableHead>
+
+                <TableHead>
+                  Risk
+                </TableHead>
+
+                <TableHead>
+                  Status
+                </TableHead>
+
+                <TableHead>
+                  Amount
+                </TableHead>
+
+                <TableHead>
+                  Attribution
+                </TableHead>
+
+                <TableHead>
+                  Team
+                </TableHead>
               </TableRow>
             </TableHeader>
+
             <TableBody>
-              {workspaces.slice(0, 5).map((w) => (
-                <TableRow key={w.id}>
+              {active.slice(0, 5).map((workspace) => (
+                <TableRow
+                  key={workspace.id}
+                >
                   <TableCell>
                     <Link
-                      href={`/workspaces/${w.id}`}
+                      href={`/workspaces/${workspace.id}`}
                       className="font-medium hover:underline"
                     >
-                      {w.id}
+                      {workspace.id}
                     </Link>
+
                     <div className="max-w-[260px] truncate text-xs text-muted-foreground">
-                      {w.title}
+                      {workspace.title}
                     </div>
                   </TableCell>
+
                   <TableCell>
-                    <RiskBadge level={w.riskLevel} score={w.riskScore} />
+                    <RiskBadge
+                      level={workspace.riskLevel}
+                      score={workspace.riskScore}
+                    />
                   </TableCell>
+
                   <TableCell>
-                    <StatusBadge status={w.status} />
+                    <StatusBadge
+                      status={workspace.status}
+                    />
                   </TableCell>
+
                   <TableCell className="tabular-nums">
-                    {inr(w.amountInr)}
+                    {inr(workspace.amountInr)}
                   </TableCell>
+
                   <TableCell className="text-xs">
-                    {w.summary.vasps.join(", ") || (
+                    {workspace.summary.vasps.join(
+                      ", ",
+                    ) || (
                       <span className="text-muted-foreground">
                         Unattributed
                       </span>
                     )}
                   </TableCell>
+
                   <TableCell>
-                    <MemberStack ids={w.members} />
+                    <MemberStack
+                      ids={workspace.members}
+                    />
                   </TableCell>
                 </TableRow>
               ))}
+
+              {active.length === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className="h-24 text-center text-muted-foreground"
+                  >
+                    No active workspaces.
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>
