@@ -1,9 +1,11 @@
 import os
 import requests
+from datetime import datetime
 from config import BASE_URL, SUPPORTED_CHAINS
 
+
 KNOWN_REAL_TOKEN_CONTRACTS = {
-    "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "USDT": "0xdac17f958d2ee523a220620006994597c13d831ec7",
     "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
     "DAI": "0x6b175474e89094c44da98b954eedeac495271d0f",
     "WETH": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
@@ -21,7 +23,7 @@ def _is_spoofed_token(symbol, contract_address):
     if upper in KNOWN_REAL_TOKEN_CONTRACTS:
         real_address = KNOWN_REAL_TOKEN_CONTRACTS[upper]
 
-        if (contract_address or "").lower() != real_address:
+        if (contract_address or "").lower() != real_address.lower():
             return True
 
     return False
@@ -35,7 +37,6 @@ QUICKNODE_ENDPOINTS = {
     56: os.getenv("QUICKNODE_BSC_URL"),
 }
 
-
 GOLDRUSH_CHAINS = {
     1: "eth-mainnet",
     56: "bsc-mainnet",
@@ -45,9 +46,9 @@ GOLDRUSH_CHAINS = {
     43114: "avalanche-mainnet",
 }
 
-
 ALCHEMY_NETWORKS = {
     1: "eth-mainnet",
+    56: "bnb-mainnet",
     137: "polygon-mainnet",
     42161: "arb-mainnet",
     10: "opt-mainnet",
@@ -65,6 +66,29 @@ def _normalize_address(address):
     return (address or "").lower()
 
 
+def _parse_timestamp(value):
+    if not value:
+        return 0
+
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+
+        try:
+            return int(
+                datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                ).timestamp()
+            )
+        except ValueError:
+            return 0
+
+    return 0
 
 
 def _etherscan_fetch(
@@ -74,19 +98,6 @@ def _etherscan_fetch(
     limit,
     extra_params="",
 ):
-    """
-    Fetch indexed account data from Etherscan V2.
-
-    Returns:
-        list | None
-
-    None means:
-        Etherscan could not provide the requested data.
-
-    [] means:
-        Etherscan successfully answered but there were no records.
-    """
-
     if not ETHERSCAN_API_KEY:
         print("[tracer] Etherscan API key missing")
         return None
@@ -106,7 +117,6 @@ def _etherscan_fetch(
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-
     except (requests.RequestException, ValueError) as exc:
         print(
             f"[tracer] Etherscan network error "
@@ -130,20 +140,11 @@ def _etherscan_fetch(
     return result[:limit]
 
 
-
-
 def _goldrush_fetch_transactions(
     address,
     chain_id,
     limit=10,
 ):
-    """
-    GoldRush indexed transaction history.
-
-    GoldRush transactions_v3 gives us transaction-level data
-    and decoded log events.
-    """
-
     if not GOLDRUSH_API_KEY:
         return None
 
@@ -175,7 +176,6 @@ def _goldrush_fetch_transactions(
         )
         response.raise_for_status()
         payload = response.json()
-
     except (requests.RequestException, ValueError) as exc:
         print(
             f"[tracer] GoldRush error "
@@ -199,16 +199,11 @@ def _goldrush_fetch_transactions(
     return items[:limit]
 
 
-
 def _alchemy_rpc(
     chain_id,
     method,
     params,
 ):
-    """
-    Generic Alchemy JSON-RPC request.
-    """
-
     if not ALCHEMY_API_KEY:
         return None
 
@@ -237,7 +232,6 @@ def _alchemy_rpc(
         )
         response.raise_for_status()
         data = response.json()
-
     except (requests.RequestException, ValueError) as exc:
         print(
             f"[tracer] Alchemy error "
@@ -260,45 +254,72 @@ def _alchemy_fetch_transfers(
     address,
     chain_id,
     limit=10,
+    direction="outgoing",
 ):
-    """
-    Alchemy Transfers API.
-
-    Used for indexed wallet transfer history on chains
-    supported by Alchemy's Transfers API.
-    """
-
     if chain_id not in ALCHEMY_NETWORKS:
         return None
 
+    transfers = []
+
     categories = [
         "external",
+        "internal",
         "erc20",
     ]
 
-    result = _alchemy_rpc(
-        chain_id,
-        "alchemy_getAssetTransfers",
-        [
-            {
+    page_key = None
+
+    try:
+        while len(transfers) < limit:
+            params = {
                 "fromBlock": "0x0",
                 "toBlock": "latest",
-                "fromAddress": address,
                 "category": categories,
                 "withMetadata": True,
                 "excludeZeroValue": True,
-                "maxCount": hex(limit),
+                "maxCount": hex(
+                    min(limit - len(transfers), 100)
+                ),
                 "order": "desc",
             }
-        ],
-    )
 
-    if result is None:
+            if direction == "incoming":
+                params["toAddress"] = address
+            else:
+                params["fromAddress"] = address
+
+            if page_key:
+                params["pageKey"] = page_key
+
+            result = _alchemy_rpc(
+                chain_id,
+                "alchemy_getAssetTransfers",
+                [params],
+            )
+
+            if result is None:
+                return None
+
+            batch = result.get("transfers", [])
+
+            if not isinstance(batch, list):
+                return None
+
+            transfers.extend(batch)
+
+            page_key = result.get("pageKey")
+
+            if not page_key or not batch:
+                break
+
+    except Exception as exc:
+        print(
+            f"[tracer] Alchemy transfer error "
+            f"chain={chain_id}: {exc}"
+        )
         return None
 
-    return result.get("transfers", [])
-
-
+    return transfers[:limit]
 
 
 def _quicknode_rpc(
@@ -306,12 +327,6 @@ def _quicknode_rpc(
     method,
     params,
 ):
-    """
-    Generic QuickNode JSON-RPC request.
-
-    Currently configured for BSC (chain 56).
-    """
-
     endpoint = QUICKNODE_ENDPOINTS.get(chain_id)
 
     if not endpoint:
@@ -332,7 +347,6 @@ def _quicknode_rpc(
         )
         response.raise_for_status()
         data = response.json()
-
     except (requests.RequestException, ValueError) as exc:
         print(
             f"[tracer] QuickNode error "
@@ -359,7 +373,6 @@ def _quicknode_block_number(chain_id):
     )
 
 
-
 def _normalize_etherscan_transaction(tx, chain_id):
     from_address = _normalize_address(tx.get("from"))
     to_address = _normalize_address(tx.get("to"))
@@ -374,6 +387,7 @@ def _normalize_etherscan_transaction(tx, chain_id):
         "from": from_address,
         "to": to_address,
         "value": tx.get("value", "0"),
+        "value_decimals": 18,
         "token": "ETH",
         "type": tx_type,
         "tx_hash": tx.get("hash", ""),
@@ -428,6 +442,7 @@ def _normalize_etherscan_internal(tx, chain_id):
         "from": _normalize_address(tx.get("from")),
         "to": _normalize_address(tx.get("to")),
         "value": tx.get("value", "0"),
+        "value_decimals": 18,
         "token": "ETH",
         "type": "internal_transfer",
         "tx_hash": tx.get("hash", ""),
@@ -440,14 +455,11 @@ def _normalize_etherscan_internal(tx, chain_id):
     }
 
 
-def _normalize_goldrush_transaction(tx, address, chain_id):
-    """
-    Convert GoldRush transaction structure into CITRUS format.
-
-    GoldRush's transaction object can contain decoded log_events,
-    so we preserve the complete original object in _raw.
-    """
-
+def _normalize_goldrush_transaction(
+    tx,
+    address,
+    chain_id,
+):
     from_address = _normalize_address(
         tx.get("from_address")
     )
@@ -456,28 +468,11 @@ def _normalize_goldrush_transaction(tx, address, chain_id):
         tx.get("to_address")
     )
 
-    value = tx.get("value", "0")
-
-    timestamp = tx.get(
-        "block_signed_at"
-    )
-
-    if isinstance(timestamp, str):
-        try:
-            from datetime import datetime
-
-            timestamp = int(
-                datetime.fromisoformat(
-                    timestamp.replace("Z", "+00:00")
-                ).timestamp()
-            )
-        except ValueError:
-            timestamp = 0
-
     return {
         "from": from_address,
         "to": to_address,
-        "value": str(value or "0"),
+        "value": str(tx.get("value") or "0"),
+        "value_decimals": 18,
         "token": "ETH",
         "type": (
             "eth_transfer"
@@ -488,13 +483,52 @@ def _normalize_goldrush_transaction(tx, address, chain_id):
             "tx_hash",
             tx.get("tx_hash_hex", ""),
         ),
-        "timestamp": timestamp or 0,
+        "timestamp": _parse_timestamp(
+            tx.get("block_signed_at")
+        ),
         "is_spoofed_token": False,
         "chain_id": chain_id,
         "function_name": tx.get("decoded"),
         "method_id": None,
         "_raw": tx,
     }
+
+
+def _extract_alchemy_timestamp(tx):
+    metadata = tx.get("metadata") or {}
+
+    if isinstance(metadata, dict):
+        return _parse_timestamp(
+            metadata.get("blockTimestamp")
+        )
+
+    return 0
+
+
+def _alchemy_raw_value(tx):
+    raw_contract = tx.get("rawContract") or {}
+
+    raw_value = raw_contract.get("value")
+    decimals = _safe_int(
+        raw_contract.get("decimal"),
+        18,
+    )
+
+    if raw_value is not None:
+        return str(raw_value), decimals
+
+    value = tx.get("value", 0)
+
+    try:
+        raw_value = int(
+            round(
+                float(value) * (10 ** decimals)
+            )
+        )
+    except (TypeError, ValueError):
+        raw_value = 0
+
+    return str(raw_value), decimals
 
 
 def _normalize_alchemy_transfer(
@@ -520,26 +554,34 @@ def _normalize_alchemy_transfer(
         "ETH",
     )
 
-    raw_value = tx.get(
-        "value",
-        0,
-    )
+    value, decimals = _alchemy_raw_value(tx)
 
-    token_type = (
-        "erc20_transfer"
-        if category == "erc20"
-        else "eth_transfer"
-    )
+    if category == "erc20":
+        token_type = "erc20_transfer"
+    elif category == "internal":
+        token_type = "internal_transfer"
+    else:
+        token_type = "eth_transfer"
+
+    raw_contract = tx.get("rawContract") or {}
 
     return {
         "from": from_address,
         "to": to_address,
-        "value": str(raw_value),
+        "value": value,
+        "value_decimals": decimals,
         "token": asset,
+        "token_contract": raw_contract.get(
+            "address",
+            "",
+        ),
         "type": token_type,
         "tx_hash": tx.get("hash", ""),
-        "timestamp": 0,
-        "is_spoofed_token": False,
+        "timestamp": _extract_alchemy_timestamp(tx),
+        "is_spoofed_token": _is_spoofed_token(
+            asset,
+            raw_contract.get("address", ""),
+        ) if category == "erc20" else False,
         "chain_id": chain_id,
         "function_name": None,
         "method_id": None,
@@ -547,6 +589,26 @@ def _normalize_alchemy_transfer(
     }
 
 
+def _provider_order(chain_id):
+    if chain_id == 56:
+        return [
+            "goldrush",
+            "alchemy",
+            "etherscan",
+        ]
+
+    if chain_id == 43114:
+        return [
+            "goldrush",
+            "etherscan",
+            "alchemy",
+        ]
+
+    return [
+        "etherscan",
+        "goldrush",
+        "alchemy",
+    ]
 
 
 def get_eth_transactions(
@@ -555,98 +617,209 @@ def get_eth_transactions(
     chain_id=1,
     limit=10,
 ):
-    """
-    Provider priority:
-
-    1. Etherscan
-    2. GoldRush
-    3. Alchemy
-    """
-
     address = address.lower()
 
-   
+    for provider in _provider_order(chain_id):
 
-    raw = _etherscan_fetch(
-        "txlist",
-        address,
-        chain_id,
-        limit,
-    )
-
-    if raw is not None:
-        print(
-            f"[tracer] ETH transactions "
-            f"chain={chain_id}: Etherscan"
-        )
-
-        outgoing = [
-            tx for tx in raw
-            if _normalize_address(tx.get("from")) == address
-        ]
-
-        return [
-            _normalize_etherscan_transaction(
-                tx,
+        if provider == "etherscan":
+            raw = _etherscan_fetch(
+                "txlist",
+                address,
                 chain_id,
+                limit,
             )
-            for tx in outgoing
-        ]
 
-  
+            if raw is None:
+                continue
 
+            print(
+                f"[tracer] ETH transactions "
+                f"chain={chain_id}: Etherscan"
+            )
+
+            outgoing = [
+                tx for tx in raw
+                if _normalize_address(
+                    tx.get("from")
+                ) == address
+            ]
+
+            return [
+                _normalize_etherscan_transaction(
+                    tx,
+                    chain_id,
+                )
+                for tx in outgoing
+            ]
+
+        if provider == "goldrush":
+            raw = _goldrush_fetch_transactions(
+                address,
+                chain_id,
+                limit,
+            )
+
+            if raw is None:
+                continue
+
+            print(
+                f"[tracer] ETH transactions "
+                f"chain={chain_id}: GoldRush"
+            )
+
+            return [
+                _normalize_goldrush_transaction(
+                    tx,
+                    address,
+                    chain_id,
+                )
+                for tx in raw
+                if _normalize_address(
+                    tx.get("from_address")
+                ) == address
+            ]
+
+        if provider == "alchemy":
+            raw = _alchemy_fetch_transfers(
+                address,
+                chain_id,
+                limit,
+                direction="outgoing",
+            )
+
+            if raw is None:
+                continue
+
+            print(
+                f"[tracer] ETH transactions "
+                f"chain={chain_id}: Alchemy"
+            )
+
+            return [
+                _normalize_alchemy_transfer(
+                    tx,
+                    address,
+                    chain_id,
+                )
+                for tx in raw
+                if (
+                    _normalize_address(
+                        tx.get("from")
+                    ) == address
+                    and tx.get("category")
+                    in {"external", "internal"}
+                )
+            ]
+
+    return []
+
+
+def _goldrush_token_transfers(
+    address,
+    chain_id,
+    limit,
+):
     raw = _goldrush_fetch_transactions(
         address,
         chain_id,
         limit,
     )
 
-    if raw is not None:
-        print(
-            f"[tracer] ETH transactions "
-            f"chain={chain_id}: GoldRush"
+    if raw is None:
+        return None
+
+    results = []
+
+    for tx in raw:
+        if _normalize_address(
+            tx.get("from_address")
+        ) != address:
+            continue
+
+        timestamp = _parse_timestamp(
+            tx.get("block_signed_at")
         )
 
-        return [
-            _normalize_goldrush_transaction(
-                tx,
-                address,
-                chain_id,
+        for event in tx.get(
+            "log_events",
+            [],
+        ) or []:
+
+            decoded = event.get("decoded") or {}
+
+            if decoded.get("name") != "Transfer":
+                continue
+
+            params = decoded.get("params") or []
+
+            from_value = None
+            to_value = None
+            value = None
+
+            for param in params:
+                name = str(
+                    param.get("name", "")
+                ).lower()
+
+                if name == "from":
+                    from_value = param.get("value")
+                elif name == "to":
+                    to_value = param.get("value")
+                elif name == "value":
+                    value = param.get("value")
+
+            if from_value and _normalize_address(
+                from_value
+            ) != address:
+                continue
+
+            decimals = _safe_int(
+                event.get("sender_contract_decimals"),
+                18,
             )
-            for tx in raw
-            if _normalize_address(
-                tx.get("from_address")
-            ) == address
-        ]
 
- 
-    raw = _alchemy_fetch_transfers(
-        address,
-        chain_id,
-        limit,
-    )
-
-    if raw is not None:
-        print(
-            f"[tracer] ETH transactions "
-            f"chain={chain_id}: Alchemy"
-        )
-
-        return [
-            _normalize_alchemy_transfer(
-                tx,
-                address,
-                chain_id,
+            symbol = event.get(
+                "sender_name",
+                "UNKNOWN",
             )
-            for tx in raw
-            if (
-                _normalize_address(tx.get("from"))
-                == address
-                and tx.get("category") == "external"
-            )
-        ]
 
-    return []
+            contract = event.get(
+                "sender_address",
+                "",
+            )
+
+            results.append({
+                "from": address,
+                "to": _normalize_address(
+                    to_value or tx.get("to_address")
+                ),
+                "value": str(value or "0"),
+                "value_decimals": decimals,
+                "token": symbol,
+                "token_contract": contract,
+                "type": "erc20_transfer",
+                "tx_hash": tx.get(
+                    "tx_hash",
+                    "",
+                ),
+                "timestamp": timestamp,
+                "is_spoofed_token": _is_spoofed_token(
+                    symbol,
+                    contract,
+                ),
+                "chain_id": chain_id,
+                "function_name": None,
+                "method_id": None,
+                "_raw": event,
+            })
+
+            if len(results) >= limit:
+                break
+
+        if len(results) >= limit:
+            break
+
+    return results[:limit]
 
 
 def get_token_transactions(
@@ -655,134 +828,88 @@ def get_token_transactions(
     chain_id=1,
     limit=10,
 ):
-    """
-    Provider priority:
-
-    1. Etherscan
-    2. GoldRush transaction history
-    3. Alchemy Transfers API
-    """
-
     address = address.lower()
 
-    # Etherscan
-    raw = _etherscan_fetch(
-        "tokentx",
-        address,
-        chain_id,
-        limit,
-    )
+    for provider in _provider_order(chain_id):
 
-    if raw is not None:
-        print(
-            f"[tracer] ERC20 transactions "
-            f"chain={chain_id}: Etherscan"
-        )
-
-        outgoing = [
-            tx for tx in raw
-            if _normalize_address(tx.get("from")) == address
-        ]
-
-        return [
-            _normalize_etherscan_token(
-                tx,
-                chain_id,
-            )
-            for tx in outgoing
-        ]
-
-    # Alchemy
-    raw = _alchemy_fetch_transfers(
-        address,
-        chain_id,
-        limit,
-    )
-
-    if raw is not None:
-        print(
-            f"[tracer] ERC20 transactions "
-            f"chain={chain_id}: Alchemy"
-        )
-
-        return [
-            _normalize_alchemy_transfer(
-                tx,
+        if provider == "etherscan":
+            raw = _etherscan_fetch(
+                "tokentx",
                 address,
                 chain_id,
+                limit,
             )
-            for tx in raw
-            if (
-                _normalize_address(tx.get("from"))
-                == address
-                and tx.get("category") == "erc20"
-            )
-        ]
 
-    # GoldRush
-    raw = _goldrush_fetch_transactions(
-        address,
-        chain_id,
-        limit,
-    )
-
-    if raw is not None:
-        print(
-            f"[tracer] ERC20 fallback "
-            f"chain={chain_id}: GoldRush"
-        )
-
-        results = []
-
-        for tx in raw:
-            if _normalize_address(
-                tx.get("from_address")
-            ) != address:
+            if raw is None:
                 continue
 
-            for event in tx.get(
-                "log_events",
-                [],
-            ) or []:
+            print(
+                f"[tracer] ERC20 transactions "
+                f"chain={chain_id}: Etherscan"
+            )
 
-                decoded = event.get(
-                    "decoded"
-                ) or {}
+            outgoing = [
+                tx for tx in raw
+                if _normalize_address(
+                    tx.get("from")
+                ) == address
+            ]
 
-                if decoded.get("name") != "Transfer":
-                    continue
+            return [
+                _normalize_etherscan_token(
+                    tx,
+                    chain_id,
+                )
+                for tx in outgoing
+            ]
 
-                results.append({
-                    "from": address,
-                    "to": _normalize_address(
-                        decoded.get("params", [{}])[1].get("value")
-                        if len(decoded.get("params", [])) > 1
-                        else tx.get("to_address")
-                    ),
-                    "value": "0",
-                    "value_decimals": 18,
-                    "token": event.get(
-                        "sender_name",
-                        "UNKNOWN",
-                    ),
-                    "token_contract": event.get(
-                        "sender_address",
-                        "",
-                    ),
-                    "type": "erc20_transfer",
-                    "tx_hash": tx.get(
-                        "tx_hash",
-                        "",
-                    ),
-                    "timestamp": 0,
-                    "is_spoofed_token": False,
-                    "chain_id": chain_id,
-                    "function_name": None,
-                    "method_id": None,
-                    "_raw": event,
-                })
+        if provider == "goldrush":
+            raw = _goldrush_token_transfers(
+                address,
+                chain_id,
+                limit,
+            )
 
-        return results[:limit]
+            if raw is None:
+                continue
+
+            print(
+                f"[tracer] ERC20 transactions "
+                f"chain={chain_id}: GoldRush"
+            )
+
+            return raw
+
+        if provider == "alchemy":
+            raw = _alchemy_fetch_transfers(
+                address,
+                chain_id,
+                limit,
+                direction="outgoing",
+            )
+
+            if raw is None:
+                continue
+
+            print(
+                f"[tracer] ERC20 transactions "
+                f"chain={chain_id}: Alchemy"
+            )
+
+            return [
+                _normalize_alchemy_transfer(
+                    tx,
+                    address,
+                    chain_id,
+                )
+                for tx in raw
+                if (
+                    _normalize_address(
+                        tx.get("from")
+                    ) == address
+                    and tx.get("category") == "erc20"
+                )
+            ]
 
     return []
 
@@ -793,14 +920,6 @@ def get_internal_transactions(
     chain_id=1,
     limit=10,
 ):
-    """
-    Internal transfers are provider-dependent.
-
-    Etherscan remains the primary source.
-    GoldRush transaction data is the fallback.
-    QuickNode is reserved for lower-level tracing.
-    """
-
     address = address.lower()
 
     raw = _etherscan_fetch(
@@ -818,7 +937,9 @@ def get_internal_transactions(
 
         outgoing = [
             tx for tx in raw
-            if _normalize_address(tx.get("from")) == address
+            if _normalize_address(
+                tx.get("from")
+            ) == address
         ]
 
         return [
@@ -829,9 +950,48 @@ def get_internal_transactions(
             for tx in outgoing
         ]
 
-    # For now, don't fabricate internal transactions from RPC.
-    # QuickNode's Trace API will be integrated here once we
-    # implement transaction-level tracing.
+    raw = _alchemy_fetch_transfers(
+        address,
+        chain_id,
+        limit,
+        direction="outgoing",
+    )
+
+    if raw is not None:
+        internal = [
+            tx
+            for tx in raw
+            if (
+                tx.get("category") == "internal"
+                and _normalize_address(
+                    tx.get("from")
+                ) == address
+            )
+        ]
+
+        if internal:
+            print(
+                f"[tracer] Internal transactions "
+                f"chain={chain_id}: Alchemy"
+            )
+
+            return [
+                _normalize_alchemy_transfer(
+                    tx,
+                    address,
+                    chain_id,
+                )
+                for tx in internal
+            ]
+
+    if chain_id == 56:
+        block = _quicknode_block_number(chain_id)
+
+        if block is not None:
+            print(
+                f"[tracer] QuickNode available "
+                f"for lower-level tracing chain={chain_id}"
+            )
 
     return []
 
@@ -853,20 +1013,30 @@ def get_incoming_transactions(
 
     if raw is not None:
         incoming = [
-            tx for tx in raw
+            tx
+            for tx in raw
             if tx.get("to")
-            and _normalize_address(tx.get("to")) == address
+            and _normalize_address(
+                tx.get("to")
+            ) == address
         ]
 
         if not incoming:
             return None
 
-        return min(
+        timestamps = [
             _safe_int(tx.get("timeStamp"))
             for tx in incoming
-        )
+        ]
 
-    # GoldRush fallback
+        timestamps = [
+            timestamp
+            for timestamp in timestamps
+            if timestamp
+        ]
+
+        return min(timestamps) if timestamps else None
+
     raw = _goldrush_fetch_transactions(
         address,
         chain_id,
@@ -885,36 +1055,54 @@ def get_incoming_transactions(
         if not incoming:
             return None
 
-        timestamps = []
-
-        for tx in incoming:
-            timestamp = tx.get(
-                "block_signed_at"
+        timestamps = [
+            _parse_timestamp(
+                tx.get("block_signed_at")
             )
+            for tx in incoming
+        ]
 
-            if isinstance(timestamp, str):
-                try:
-                    from datetime import datetime
+        timestamps = [
+            timestamp
+            for timestamp in timestamps
+            if timestamp
+        ]
 
-                    timestamp = int(
-                        datetime.fromisoformat(
-                            timestamp.replace(
-                                "Z",
-                                "+00:00",
-                            )
-                        ).timestamp()
-                    )
-                except ValueError:
-                    continue
+        return min(timestamps) if timestamps else None
 
-            if timestamp:
-                timestamps.append(timestamp)
+    raw = _alchemy_fetch_transfers(
+        address,
+        chain_id,
+        limit,
+        direction="incoming",
+    )
+
+    if raw is not None:
+        incoming = [
+            tx
+            for tx in raw
+            if _normalize_address(
+                tx.get("to")
+            ) == address
+        ]
+
+        if not incoming:
+            return None
+
+        timestamps = [
+            _extract_alchemy_timestamp(tx)
+            for tx in incoming
+        ]
+
+        timestamps = [
+            timestamp
+            for timestamp in timestamps
+            if timestamp
+        ]
 
         return min(timestamps) if timestamps else None
 
     return None
-
-
 
 
 HOPPABLE_TYPES = {
@@ -976,7 +1164,6 @@ def trace_wallet(
         next_layer = []
 
         for addr in current_layer:
-
             addr = addr.lower()
 
             if addr in visited:
@@ -1002,14 +1189,13 @@ def trace_wallet(
             )
 
             for tx in txns:
-
                 tx["hop"] = hop
-
                 all_edges.append(tx)
 
                 if (
                     tx["type"] in HOPPABLE_TYPES
                     and tx["to"]
+                    and tx["to"] != addr
                 ):
                     next_layer.append(
                         tx["to"].lower()
@@ -1025,30 +1211,12 @@ def trace_wallet(
     return all_edges, incoming_timestamps
 
 
-
-
 def cross_chain_reuse_check(
     address,
     api_key=None,
     primary_chain_id=1,
     other_chains=None,
 ):
-    """
-    Check whether the address has activity on other chains.
-
-    Provider priority:
-        1. GoldRush
-        2. Etherscan
-        3. Alchemy
-        4. QuickNode basic connectivity
-
-    Important:
-        QuickNode RPC alone cannot efficiently answer
-        "give me every transaction for this address".
-        It is therefore a connectivity / lower-level fallback,
-        not an indexed transaction-history substitute.
-    """
-
     address = address.lower()
 
     if other_chains is None:
@@ -1061,75 +1229,85 @@ def cross_chain_reuse_check(
     findings = {}
 
     for cid in other_chains:
-
         chain_name = SUPPORTED_CHAINS.get(
             cid,
             str(cid),
         )
 
-       
+        providers = _provider_order(cid)
+        checked = False
 
-        raw = _goldrush_fetch_transactions(
-            address,
-            cid,
-            limit=1,
-        )
+        for provider in providers:
 
-        if raw is not None:
+            if provider == "goldrush":
+                raw = _goldrush_fetch_transactions(
+                    address,
+                    cid,
+                    limit=1,
+                )
 
-            if raw:
-                findings[chain_name] = cid
+                if raw is None:
+                    continue
 
-            print(
-                f"[cross-chain] {chain_name}: "
-                f"GoldRush checked"
-            )
+                checked = True
 
+                if raw:
+                    findings[chain_name] = cid
+
+                print(
+                    f"[cross-chain] {chain_name}: "
+                    f"GoldRush checked"
+                )
+                break
+
+            if provider == "etherscan":
+                raw = _etherscan_fetch(
+                    "txlist",
+                    address,
+                    cid,
+                    limit=1,
+                )
+
+                if raw is None:
+                    continue
+
+                checked = True
+
+                if raw:
+                    findings[chain_name] = cid
+
+                print(
+                    f"[cross-chain] {chain_name}: "
+                    f"Etherscan checked"
+                )
+                break
+
+            if provider == "alchemy":
+                raw = _alchemy_fetch_transfers(
+                    address,
+                    cid,
+                    limit=1,
+                    direction="outgoing",
+                )
+
+                if raw is None:
+                    continue
+
+                checked = True
+
+                if raw:
+                    findings[chain_name] = cid
+
+                print(
+                    f"[cross-chain] {chain_name}: "
+                    f"Alchemy checked"
+                )
+                break
+
+        if checked:
             continue
-
-
-        raw = _etherscan_fetch(
-            "txlist",
-            address,
-            cid,
-            limit=1,
-        )
-
-        if raw is not None:
-
-            if raw:
-                findings[chain_name] = cid
-
-            print(
-                f"[cross-chain] {chain_name}: "
-                f"Etherscan checked"
-            )
-
-            continue
-
-       
-
-        raw = _alchemy_fetch_transfers(
-            address,
-            cid,
-            limit=1,
-        )
-
-        if raw is not None:
-
-            if raw:
-                findings[chain_name] = cid
-
-            print(
-                f"[cross-chain] {chain_name}: "
-                f"Alchemy checked"
-            )
-
-            continue
-
 
         if cid in QUICKNODE_ENDPOINTS:
-
             block = _quicknode_block_number(cid)
 
             if block is not None:
@@ -1137,18 +1315,15 @@ def cross_chain_reuse_check(
                     f"[cross-chain] {chain_name}: "
                     f"QuickNode reachable"
                 )
-
-        
             else:
                 print(
                     f"[cross-chain] {chain_name}: "
                     f"all providers unavailable"
                 )
-
         else:
             print(
                 f"[cross-chain] {chain_name}: "
-                f"no indexed provider available"
+                f"all indexed providers unavailable"
             )
 
     return findings
