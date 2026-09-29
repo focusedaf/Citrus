@@ -1,3 +1,4 @@
+from starlette.middleware.base import BaseHTTPMiddleware
 import os
 import glob
 from dotenv import load_dotenv
@@ -41,6 +42,18 @@ app = FastAPI(
     version="1.1.0",
     description="Real-time crypto fraud attribution and investigation workspace API.",
 )
+
+class StripAPIPrefixMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.scope["path"] == "/api":
+            request.scope["path"] = "/"
+        elif request.scope["path"].startswith("/api/"):
+            request.scope["path"] = request.scope["path"][4:]
+
+        return await call_next(request)
+
+
+app.add_middleware(StripAPIPrefixMiddleware)
 
 # Frontend runs separately during development/deployment.
 app.add_middleware(
