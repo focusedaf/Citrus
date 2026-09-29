@@ -708,6 +708,14 @@ def _alchemy_raw_value(tx):
     )
 
     if raw_value is not None:
+        try:
+            if isinstance(raw_value, str) and raw_value.lower().startswith("0x"):
+                raw_value = int(raw_value, 16)
+            else:
+                raw_value = int(raw_value)
+        except (TypeError, ValueError):
+            raw_value = 0
+
         return (
             str(raw_value),
             decimals,
