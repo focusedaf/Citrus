@@ -163,6 +163,7 @@ def trace(
     max_hops: int = 3,
     check_cross_chain: bool = True,
 ):
+    try:
     address = address.lower().strip()
 
     if not address:
@@ -401,6 +402,20 @@ def trace(
             "report": report_blob_url,
         },
     }
+    
+    except Exception as exc:
+        import traceback
+
+        print("\n========== CITRUS TRACE CRASH ==========")
+        print(f"address={address}")
+        print(f"chain_id={chain_id}")
+        print(f"max_hops={max_hops}")
+        print(f"error={repr(exc)}")
+        traceback.print_exc()
+        print("========== END CITRUS TRACE CRASH ==========\n")
+
+        raise 
+
 
 
 @app.post("/ingest-complaint")
