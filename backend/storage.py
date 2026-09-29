@@ -1,6 +1,6 @@
+import os
 import json
 from typing import Any
-
 from dotenv import load_dotenv
 from vercel.blob import BlobClient, AsyncBlobClient
 
@@ -12,13 +12,17 @@ def get_blob_client() -> BlobClient:
     return BlobClient()
 
 async def get_blob(blob_path: str):
-    """Read a private Blob by its path."""
-    client = AsyncBlobClient()
-
-    return await client.get(
-        blob_path,
-        access="private",
+    print(
+        "[BLOB DEBUG] token present:",
+        bool(os.getenv("BLOB_READ_WRITE_TOKEN"))
     )
+    print(
+        "[BLOB DEBUG] store id present:",
+        bool(os.getenv("BLOB_STORE_ID"))
+    )
+
+    client = AsyncBlobClient()
+    return await client.get(blob_path, access="private")
 
 def upload_bytes(
     data: bytes,
