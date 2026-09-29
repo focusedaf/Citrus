@@ -6,6 +6,12 @@ from vercel.blob import BlobClient, AsyncBlobClient
 
 load_dotenv()
 
+token = os.getenv("BLOB_READ_WRITE_TOKEN")
+
+print("[BLOB DEBUG] token present:", bool(token))
+print("[BLOB DEBUG] token length:", len(token) if token else 0)
+print("[BLOB DEBUG] token prefix:", token[:12] if token else "NONE")
+print("[BLOB DEBUG] store id present:", bool(os.getenv("BLOB_STORE_ID")))
 
 def get_blob_client() -> BlobClient:
     """Create a Vercel Blob client."""
