@@ -22,7 +22,7 @@ async def get_blob(blob_path: str):
     )
 
     client = AsyncBlobClient()
-    return await client.get(blob_path, access="private")
+    return await client.get(blob_path, access="private",token=os.getenv("BLOB_READ_WRITE_TOKEN"),)
 
 def upload_bytes(
     data: bytes,
