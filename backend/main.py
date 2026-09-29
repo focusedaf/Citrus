@@ -347,15 +347,10 @@ def trace(
         )
 
         report_pdf = generate_pdf_report(
-            trace_id=trace_id,
-            address=address,
-            chain_id=chain_id,
-            edges=serialized_edges,
-            tags=tags,
-            table=table,
             summary=summary,
             risk=risk,
-            cross_chain=cross_chain,
+            trace_id=trace_id,
+            evidence=evidence,
         )
 
         report_blob_url = upload_report(
