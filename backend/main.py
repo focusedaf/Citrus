@@ -211,13 +211,20 @@ def trace(
         }
 
         trace_id = save_trace(
-            address=address,
-            chain_id=chain_id,
-            max_hops=max_hops,
-            risk=risk,
-            tags=[],
-            evidence_hash=None,
-        )
+                address=address,
+                chain_id=chain_id,
+                summary={
+                    "chain": _chain_name(chain_id),
+                    "address": address,
+                    "nodes": 1,
+                    "edges": 0,
+                },
+                edges=[],
+                risk=risk,
+                tags={},
+                evidence_hash=None,
+                max_hops=max_hops,
+                )
 
         ensure_workspace(
             trace_id=trace_id,
@@ -309,12 +316,14 @@ def trace(
     evidence_hash = compute_hash(evidence_core)
 
     trace_id = save_trace(
-        address=address,
-        chain_id=chain_id,
-        max_hops=max_hops,
-        risk=risk,
-        tags=tags,
-        evidence_hash=evidence_hash,
+    address=address,
+    chain_id=chain_id,
+    summary=summary,
+    edges=serialized_edges,
+    risk=risk,
+    tags=tags,
+    evidence_hash=evidence_hash,
+    max_hops=max_hops,
     )
 
     evidence_blob_url = upload_evidence(
@@ -326,11 +335,9 @@ def trace(
     )
 
     graph_html = render_graph(
-        G,
-        address=address,
-        chain_id=chain_id,
-        tags=tags,
-        risk=risk,
+    G,
+    tags=tags,
+    start_address=address,
     )
 
     graph_blob_url = upload_graph(
@@ -362,12 +369,12 @@ def trace(
     )
 
     if alert:
-        save_alert(
-            trace_id=trace_id,
-            address=address,
-            risk=risk,
-            message=alert,
-        )
+       save_alert(
+        trace_id=trace_id,
+        address=address,
+        risk_level=risk["level"],
+        message=alert,
+    )
 
     workspace_id = ensure_workspace(
         trace_id=trace_id,
@@ -568,10 +575,13 @@ def reports():
 
     return [
         {
-            "trace_id": trace.get("trace_id"),
+            "trace_id": trace.get("id"),
             "address": trace.get("address"),
             "chain_id": trace.get("chain_id"),
-            "risk": trace.get("risk"),
+            "risk": {
+                "score": trace.get("risk_score", 0),
+                "level": trace.get("risk_level", "Low"),
+            },
             "created_at": trace.get("created_at"),
         }
         for trace in traces

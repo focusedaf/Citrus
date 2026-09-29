@@ -158,20 +158,24 @@ def compute_metrics(
         ),
     }
 
-
 def compute_risk(
     edges,
     tags,
-    address=None,
+    start_address=None,
     incoming_timestamps=None,
+    cross_chain_findings=None,
+    address=None,
     cross_chain_results=None,
     max_hops=None,
-    **kwargs,
 ):
-    if cross_chain_results is None:
-        cross_chain_results = kwargs.get(
-            "cross_chain_findings",
-            {},
+    if start_address is None:
+        start_address = address
+
+    if cross_chain_findings is None:
+        cross_chain_findings = (
+            cross_chain_results
+            if cross_chain_results is not None
+            else {}
         )
 
     if not edges:
@@ -187,7 +191,7 @@ def compute_risk(
         edges,
         tags,
         incoming_timestamps=incoming_timestamps,
-        cross_chain_findings=cross_chain_results,
+        cross_chain_findings=cross_chain_findings,
     )
 
     score = 0

@@ -609,7 +609,7 @@ def investigation_summary(
             "bridges": 0,
             "total_value": 0.0,
             "risk": risk or {},
-            "cross_chain": cross_chain or [],
+            "cross_chain": cross_chain or {},
         }
 
     stats = _compute_stats(G)
@@ -642,5 +642,5 @@ def investigation_summary(
         "bridges": bridges,
         "total_value": stats["total_value"],
         "risk": risk or {},
-        "cross_chain": cross_chain or [],
+        "cross_chain": cross_chain or {},
     }
