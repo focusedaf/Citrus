@@ -27,7 +27,22 @@ def _workspace_id(trace_id: int) -> str:
     return f"CT-{1000 + trace_id}"
 
 
-def ensure_workspace(trace_id, address, chain, complaint_id=None, source="NCRP/SAHYOG (mock)"):
+def ensure_workspace(
+    trace_id,
+    address,
+    chain=None,
+    chain_id=None,
+    complaint_id=None,
+    source="NCRP/SAHYOG (mock)",
+):
+    # Keep chain_id as the canonical blockchain identifier while preserving
+    # the existing `chain` database column used by the workspace UI.
+    if chain_id is not None:
+        from config import SUPPORTED_CHAINS
+        chain = SUPPORTED_CHAINS.get(chain_id, f"Chain {chain_id}")
+    if chain is None:
+        chain = "Unknown"
+
     wid = _workspace_id(trace_id)
     with get_connection() as conn:
         cur = conn.cursor()
@@ -106,7 +121,9 @@ def workspace_dict(trace, ws):
     return {
         "id": ws["id"], "traceId": trace["id"], "title": ws["title"], "complaintId": ws["complaint_id"],
         "source": ws["source"], "victimState": ws["victim_state"], "address": trace["address"],
-        "chain": ws["chain"], "status": ws["status"], "riskScore": risk_score, "riskLevel": risk_level,
+        "chain": ws["chain"],
+        "chainId": trace.get("chain_id"),
+        "status": ws["status"], "riskScore": risk_score, "riskLevel": risk_level,
         "amountInr": ws["amount_inr"] or 0, "createdAt": ws["created_at"], "members": _members(ws["id"]),
         "lead": ws["lead"], "nodes": _node_records(ws, trace), "edges": _edge_records(trace),
         "reasons": (summary.get("risk_indicators") or []),
