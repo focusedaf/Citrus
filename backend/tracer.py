@@ -1,8 +1,13 @@
 import os
+import time
+import threading
 import requests
 from datetime import datetime
 
 from config import BASE_URL, SUPPORTED_CHAINS
+
+_goldrush_disabled_until = 0.0
+_goldrush_lock = threading.Lock()
 
 
 KNOWN_REAL_TOKEN_CONTRACTS = {
@@ -130,7 +135,7 @@ def _etherscan_fetch(
     try:
         response = requests.get(
             url,
-            timeout=ALCHEMY_TIMEOUT,
+            timeout=ETHERSCAN_TIMEOUT,
         )
         response.raise_for_status()
         data = response.json()
@@ -350,6 +355,7 @@ def _alchemy_fetch_transfers(
     chain_id,
     limit=10,
     direction="outgoing",
+    categories=None,
 ):
     if chain_id not in ALCHEMY_NETWORKS:
         return None
@@ -357,11 +363,12 @@ def _alchemy_fetch_transfers(
     transfers = []
     page_key = None
 
-    categories = [
-        "external",
-        "internal",
-        "erc20",
-    ]
+    if categories is None:
+        categories = [
+            "external",
+            "internal",
+            "erc20",
+        ]
 
     try:
         while len(transfers) < limit:
@@ -449,7 +456,7 @@ def _quicknode_rpc(
         response = requests.post(
             endpoint,
             json=payload,
-            timeout=10,
+            timeout=QUICKNODE_TIMEOUT,
         )
 
         response.raise_for_status()
