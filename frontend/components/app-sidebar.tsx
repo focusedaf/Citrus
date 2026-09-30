@@ -18,6 +18,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useStore } from "@/lib/store";
+import { getReports } from "@/lib/api";
 import {
   BellRingIcon,
   CircleHelpIcon,
@@ -32,10 +33,36 @@ import {
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const path = usePathname();
   const { state } = useStore();
+  const [reportCount, setReportCount] = React.useState(0);
+
   const openAlerts = state.alerts.filter((a) => !a.acknowledged).length;
   const activeCases = state.workspaces.filter(
     (w) => w.status !== "Closed",
   ).length;
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadReportCount() {
+      try {
+        const reports = await getReports(500);
+
+        if (!cancelled) {
+          setReportCount(reports.length);
+        }
+      } catch {
+        if (!cancelled) {
+          setReportCount(0);
+        }
+      }
+    }
+
+    loadReportCount();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.workspaces.length]);
 
   const main = [
     { title: "Dashboard", url: "/dashboard", icon: LayoutDashboardIcon },
@@ -45,9 +72,20 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       icon: FolderKanbanIcon,
       badge: activeCases,
     },
-    { title: "Alerts", url: "/alerts", icon: BellRingIcon, badge: openAlerts },
-    { title: "Reports", url: "/reports", icon: FileChartColumnIcon },
+    {
+      title: "Alerts",
+      url: "/alerts",
+      icon: BellRingIcon,
+      badge: openAlerts,
+    },
+    {
+      title: "Reports",
+      url: "/reports",
+      icon: FileChartColumnIcon,
+      badge: reportCount,
+    },
   ];
+
   const isActive = (u: string) => path === u || path.startsWith(u + "/");
 
   return (
@@ -69,6 +107,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
+
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent className="flex flex-col gap-2">
@@ -84,6 +123,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
+
             <SidebarMenu>
               {main.map((it) => (
                 <SidebarMenuItem key={it.title}>
@@ -95,6 +135,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                     <it.icon />
                     <span>{it.title}</span>
                   </SidebarMenuButton>
+
                   {!!it.badge && (
                     <SidebarMenuBadge>{it.badge}</SidebarMenuBadge>
                   )}
@@ -134,6 +175,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                   <span>Settings</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+
               <SidebarMenuItem>
                 <SidebarMenuButton render={<Link href="/settings" />}>
                   <CircleHelpIcon />
@@ -144,6 +186,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+
       <SidebarFooter>
         <NavUser
           user={{
