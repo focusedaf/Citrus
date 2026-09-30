@@ -175,7 +175,7 @@ export function SiteHeader() {
             </span>
           </Badge>
 
-          <button
+          {/* <button
             onClick={() => {
               if (confirm("Reset demo data to the seeded state?"))
                 dispatch({ type: "reset" });
@@ -200,7 +200,7 @@ export function SiteHeader() {
             "
           >
             Reset demo
-          </button>
+          </button> */}
         </div>
       </div>
     </header>
