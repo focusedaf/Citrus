@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+
 import { NavUser } from "@/components/nav-user";
 import {
   Sidebar,
@@ -17,8 +18,10 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+
 import { useStore } from "@/lib/store";
 import { getReports } from "@/lib/api";
+
 import {
   BellRingIcon,
   CircleHelpIcon,
@@ -26,20 +29,43 @@ import {
   FolderKanbanIcon,
   LayoutDashboardIcon,
   RadarIcon,
-  Settings2Icon,
   SearchCheckIcon,
+  Settings2Icon,
 } from "lucide-react";
 
-export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
-  const path = usePathname();
+export function AppSidebar(
+  props: React.ComponentProps<typeof Sidebar>,
+) {
+  const pathname = usePathname() ?? "";
   const { state } = useStore();
+
   const [reportCount, setReportCount] = React.useState(0);
 
-  const openAlerts = state.alerts.filter((a) => !a.acknowledged).length;
-  const activeCases = state.workspaces.filter(
-    (w) => w.status !== "Closed",
+  /*
+   * Backend data can occasionally contain incomplete workspace records.
+   * Keep the sidebar defensive so one malformed record cannot crash
+   * the entire application.
+   */
+  const workspaces = Array.isArray(state.workspaces)
+    ? state.workspaces
+    : [];
+
+  const alerts = Array.isArray(state.alerts)
+    ? state.alerts
+    : [];
+
+  const openAlerts = alerts.filter(
+    (alert) => !alert.acknowledged,
   ).length;
 
+  const activeCases = workspaces.filter(
+    (workspace) => workspace?.status !== "Closed",
+  ).length;
+
+  /*
+   * Reports are not currently stored in the global store, so the
+   * sidebar gets the current report count directly from the backend.
+   */
   React.useEffect(() => {
     let cancelled = false;
 
@@ -48,9 +74,16 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         const reports = await getReports(500);
 
         if (!cancelled) {
-          setReportCount(reports.length);
+          setReportCount(
+            Array.isArray(reports) ? reports.length : 0,
+          );
         }
-      } catch {
+      } catch (error) {
+        console.error(
+          "Failed to load report count:",
+          error,
+        );
+
         if (!cancelled) {
           setReportCount(0);
         }
@@ -62,10 +95,14 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     return () => {
       cancelled = true;
     };
-  }, [state.workspaces.length]);
+  }, [workspaces.length]);
 
   const main = [
-    { title: "Dashboard", url: "/dashboard", icon: LayoutDashboardIcon },
+    {
+      title: "Dashboard",
+      url: "/dashboard",
+      icon: LayoutDashboardIcon,
+    },
     {
       title: "Workspaces",
       url: "/workspaces",
@@ -86,19 +123,31 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     },
   ];
 
-  const isActive = (u: string) => path === u || path.startsWith(u + "/");
+  const isActive = (url: string) =>
+    pathname === url ||
+    pathname.startsWith(`${url}/`);
 
   return (
-    <Sidebar collapsible="offcanvas" {...props}>
+    <Sidebar
+      collapsible="offcanvas"
+      {...props}
+    >
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/dashboard" />}>
+            <SidebarMenuButton
+              size="lg"
+              render={<Link href="/dashboard" />}
+            >
               <div className="flex size-8 items-center justify-center rounded-lg bg-amber-400 text-lg text-black">
                 🍋
               </div>
+
               <div className="grid flex-1 text-left leading-tight">
-                <span className="text-base font-semibold">Citrus</span>
+                <span className="text-base font-semibold">
+                  Citrus
+                </span>
+
                 <span className="text-[11px] text-muted-foreground">
                   Crypto Fraud Attribution
                 </span>
@@ -125,20 +174,23 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             </SidebarMenu>
 
             <SidebarMenu>
-              {main.map((it) => (
-                <SidebarMenuItem key={it.title}>
+              {main.map((item) => (
+                <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton
-                    tooltip={it.title}
-                    isActive={isActive(it.url)}
-                    render={<Link href={it.url} />}
+                    tooltip={item.title}
+                    isActive={isActive(item.url)}
+                    render={<Link href={item.url} />}
                   >
-                    <it.icon />
-                    <span>{it.title}</span>
+                    <item.icon />
+                    <span>{item.title}</span>
                   </SidebarMenuButton>
 
-                  {!!it.badge && (
-                    <SidebarMenuBadge>{it.badge}</SidebarMenuBadge>
-                  )}
+                  {typeof item.badge === "number" &&
+                    item.badge > 0 && (
+                      <SidebarMenuBadge>
+                        {item.badge}
+                      </SidebarMenuBadge>
+                    )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
@@ -146,22 +198,82 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Recent workspaces</SidebarGroupLabel>
+          <SidebarGroupLabel>
+            Recent workspaces
+          </SidebarGroupLabel>
+
           <SidebarGroupContent>
             <SidebarMenu>
-              {state.workspaces.slice(0, 4).map((w) => (
-                <SidebarMenuItem key={w.id}>
+              {workspaces
+                .slice(0, 4)
+                .map((workspace, index) => {
+                  /*
+                   * Some backend workspace records may currently be
+                   * missing id/title. Never allow that to break the
+                   * sidebar.
+                   */
+                  const workspaceId = String(
+                    workspace?.id ??
+                      workspace?.traceId ??
+                      `workspace-${index}`,
+                  );
+
+                  const workspaceTitle = String(
+                    workspace?.title ??
+                      "Untitled workspace",
+                  );
+
+                  /*
+                   * Index is included as the final fallback so even
+                   * duplicate/malformed backend records cannot produce
+                   * duplicate React keys.
+                   */
+                  const workspaceKey = `${workspaceId}-${workspace?.traceId ?? "unknown"}-${index}`;
+
+                  const workspaceLabel =
+                    workspaceTitle
+                      .split("–")[0]
+                      .trim() ||
+                    workspaceTitle;
+
+                  return (
+                    <SidebarMenuItem
+                      key={workspaceKey}
+                    >
+                      <SidebarMenuButton
+                        tooltip={workspaceLabel}
+                        isActive={
+                          pathname ===
+                          `/workspaces/${workspaceId}`
+                        }
+                        render={
+                          <Link
+                            href={`/workspaces/${workspaceId}`}
+                          />
+                        }
+                      >
+                        <SearchCheckIcon />
+
+                        <span className="truncate">
+                          {workspaceId} ·{" "}
+                          {workspaceLabel}
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+
+              {workspaces.length === 0 && (
+                <SidebarMenuItem>
                   <SidebarMenuButton
-                    isActive={path === `/workspaces/${w.id}`}
-                    render={<Link href={`/workspaces/${w.id}`} />}
+                    disabled
+                    className="text-muted-foreground"
                   >
                     <SearchCheckIcon />
-                    <span className="truncate">
-                      {w.id} · {w.title.split("–")[0].trim()}
-                    </span>
+                    <span>No recent workspaces</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-              ))}
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -170,14 +282,25 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton render={<Link href="/settings" />}>
+                <SidebarMenuButton
+                  tooltip="Settings"
+                  isActive={isActive("/settings")}
+                  render={
+                    <Link href="/settings" />
+                  }
+                >
                   <Settings2Icon />
                   <span>Settings</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
               <SidebarMenuItem>
-                <SidebarMenuButton render={<Link href="/settings" />}>
+                <SidebarMenuButton
+                  tooltip="Help"
+                  render={
+                    <Link href="/settings" />
+                  }
+                >
                   <CircleHelpIcon />
                   <span>Help</span>
                 </SidebarMenuButton>
@@ -191,7 +314,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <NavUser
           user={{
             name: "Insp. Aarav Mehta",
-            email: "aarav.mehta@cybercell.gov.in",
+            email:
+              "aarav.mehta@cybercell.gov.in",
             avatar: "",
           }}
         />

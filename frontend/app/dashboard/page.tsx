@@ -235,7 +235,7 @@ export default function DashboardPage() {
         const data = await getDashboardStats(30);
 
         if (!cancelled) {
-         
+
           setStats(normalizeDashboardStats(data));
         }
       } catch (error) {
@@ -248,7 +248,7 @@ export default function DashboardPage() {
               : "Failed to load dashboard statistics",
           );
 
-         
+
           setStats(emptyStats);
         }
       } finally {
@@ -788,8 +788,10 @@ export default function DashboardPage() {
             </TableHeader>
 
             <TableBody>
-              {active.slice(0, 5).map((workspace) => (
-                <TableRow key={workspace.id}>
+              {active.slice(0, 5).map((workspace, index) => (
+                <TableRow
+                  key={`${workspace.id}-${workspace.traceId ?? "local"}-${index}`}
+                >
                   <TableCell>
                     <Link
                       href={`/workspaces/${workspace.id}`}

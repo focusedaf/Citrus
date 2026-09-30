@@ -186,6 +186,12 @@ function reducer(state: State, action: Action): State {
         alerts: action.alerts ?? [],
       };
 
+    case "status":
+      return withWs(state, action.id, (workspace) => ({
+        ...log(workspace, `changed status to "${action.status}"`),
+        status: action.status,
+      }));
+
     case "comment":
       return withWs(state, action.id, (workspace) => ({
         ...log(workspace, "commented on the case"),
@@ -198,12 +204,6 @@ function reducer(state: State, action: Action): State {
             text: action.text,
           },
         ],
-      }));
-
-    case "status":
-      return withWs(state, action.id, (workspace) => ({
-        ...log(workspace, `changed status to "${action.status}"`),
-        status: action.status,
       }));
 
     case "toggleTask":
@@ -313,7 +313,11 @@ const Ctx = React.createContext<{
   ready: boolean;
 } | null>(null);
 
-export function StoreProvider({ children }: { children: React.ReactNode }) {
+export function StoreProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [state, reducerDispatch] = React.useReducer(reducer, initial);
   const [ready, setReady] = React.useState(false);
 
@@ -321,18 +325,75 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       switch (action.type) {
         case "status": {
-          const workspace = await updateStatus(action.id, action.status, ME);
+          /*
+           * IMPORTANT:
+           * Update the local store immediately.
+           * This makes New -> Tracing, Tracing -> In Review, etc.
+           * appear instantly without requiring a page refresh.
+           */
+          reducerDispatch(action);
 
-          reducerDispatch({
-            type: "setWorkspace",
-            ws: workspace,
-          });
+          try {
+            /*
+             * Persist the status change on the backend.
+             */
+            const workspace = await updateStatus(
+              action.id,
+              action.status,
+              ME,
+            );
+
+            /*
+             * If the backend returns a workspace, sync it back into
+             * the store. This keeps the frontend consistent with the
+             * backend after the request completes.
+             */
+            if (workspace) {
+              reducerDispatch({
+                type: "setWorkspace",
+                ws: workspace,
+              });
+            }
+          } catch (error) {
+            console.error(
+              "Failed to update workspace status:",
+              error,
+            );
+
+            /*
+             * If the backend update fails, reload the workspace list
+             * so the UI reflects the actual backend state.
+             */
+            try {
+              const workspaces = await getWorkspaces(100);
+
+              const updatedWorkspace = workspaces.find(
+                (workspace) => workspace.id === action.id,
+              );
+
+              if (updatedWorkspace) {
+                reducerDispatch({
+                  type: "setWorkspace",
+                  ws: updatedWorkspace,
+                });
+              }
+            } catch (refreshError) {
+              console.error(
+                "Failed to refresh workspace after status update:",
+                refreshError,
+              );
+            }
+          }
 
           return;
         }
 
         case "comment": {
-          const workspace = await addComment(action.id, action.text, ME);
+          const workspace = await addComment(
+            action.id,
+            action.text,
+            ME,
+          );
 
           reducerDispatch({
             type: "setWorkspace",
@@ -359,7 +420,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
 
         case "toggleTask": {
-          const workspace = await toggleTask(action.id, action.taskId, ME);
+          const workspace = await toggleTask(
+            action.id,
+            action.taskId,
+            ME,
+          );
 
           reducerDispatch({
             type: "setWorkspace",
@@ -370,7 +435,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
 
         case "invite": {
-          const workspace = await inviteMember(action.id, action.member, ME);
+          const workspace = await inviteMember(
+            action.id,
+            action.member,
+            ME,
+          );
 
           reducerDispatch({
             type: "setWorkspace",
@@ -394,7 +463,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
 
         case "flagNode": {
-          const result = await flagNode(action.id, action.node, ME);
+          const result = await flagNode(
+            action.id,
+            action.node,
+            ME,
+          );
 
           reducerDispatch({
             type: "setWorkspace",
@@ -425,7 +498,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
           const workspaces = await getWorkspaces(100);
 
-          const workspace = workspaces.find((item) => item.id === action.id);
+          const workspace = workspaces.find(
+            (item) => item.id === action.id,
+          );
 
           if (workspace) {
             reducerDispatch({
@@ -449,7 +524,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return;
       }
     } catch (error) {
-      console.error(`Backend action "${action.type}" failed:`, error);
+      console.error(
+        `Backend action "${action.type}" failed:`,
+        error,
+      );
     }
   }, []);
 
@@ -473,7 +551,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           });
         }
       } catch (error) {
-        console.error("Failed to load backend data:", error);
+        console.error(
+          "Failed to load backend data:",
+          error,
+        );
       } finally {
         if (!cancelled) {
           setReady(true);
