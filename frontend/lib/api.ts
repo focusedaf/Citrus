@@ -259,91 +259,84 @@ export function fromTraceResponse(
   };
 }
 
-
 export async function runTrace(
   address: string,
-  maxHops: number,
   chainId = 1,
-): Promise<{
-  ws: Workspace;
-  alert?: Alert;
-  source: "live";
-}> {
-  const controller = new AbortController();
+  maxHops = 3,
+) {
+  const params = new URLSearchParams({
+    address,
+    chain_id: String(chainId),
+    max_hops: String(maxHops),
+    check_cross_chain: "true",
+  })
 
-  const timer = setTimeout(() => controller.abort(), 60000);
+  const res = await fetch(`${API_URL}/trace?${params.toString()}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+  })
+
+  const data = await res.json().catch(() => null)
+
+  if (!res.ok) {
+    throw new Error(
+      data?.detail ||
+        data?.message ||
+        `Trace failed with HTTP ${res.status}`,
+    )
+  }
+
+  if (!data?.trace_id || !data?.workspace_id) {
+    throw new Error("Trace completed but no workspace was returned.")
+  }
+
+  /*
+   * IMPORTANT:
+   * Do NOT reconstruct the Workspace from /trace.
+   *
+   * The backend already has the canonical workspace representation at:
+   * GET /workspaces/{workspace_id}
+   */
+  const ws = await getWorkspace(data.workspace_id)
+
+  if (!ws) {
+    throw new Error(
+      `Trace ${data.trace_id} completed, but workspace ${data.workspace_id} could not be loaded.`,
+    )
+  }
+
+  /*
+   * Load the persisted alert instead of manufacturing an alert
+   * from the trace response.
+   */
+  let alert: Alert | undefined
 
   try {
-    const params = new URLSearchParams({
-      address,
-      chain_id: String(chainId),
-      max_hops: String(maxHops),
-      check_cross_chain: "true",
-    });
+    const alerts = await getAlerts(500)
 
-    const res = await fetch(`${API_URL}/trace?${params.toString()}`, {
-      method: "POST",
-      signal: controller.signal,
-    });
+    alert = alerts.find(
+      (item) =>
+        item.workspaceId === ws.id ||
+        (
+          item.address &&
+          ws.address &&
+          item.address.toLowerCase() === ws.address.toLowerCase()
+        ),
+    )
+  } catch {
+    // Trace/workspace should still work if alert loading fails.
+  }
 
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => "");
-
-      throw new Error(
-        `Trace request failed (${res.status})${
-          errorText ? `: ${errorText}` : ""
-        }`,
-      );
-    }
-
-    const data: TraceResponse = await res.json();
-
-    if (!data || typeof data.trace_id !== "number" || !data.workspace_id) {
-      throw new Error("Backend returned an invalid trace response.");
-    }
-
-   
-    let workspace: Workspace;
-
-    try {
-      workspace = await getWorkspace(data.workspace_id);
-    } catch (workspaceError) {
-      
-      console.error(
-        "Failed to fetch canonical workspace after trace:",
-        workspaceError,
-      );
-
-      const fallback = fromTraceResponse(data, chainId);
-
-      workspace = fallback.ws;
-    }
-
-  
-    let alert: Alert | undefined;
-
-    try {
-      const alerts = await getAlerts(500);
-
-      alert = alerts.find(
-        (item) =>
-          item.workspaceId === data.workspace_id ||
-          item.address?.toLowerCase() === data.address.toLowerCase(),
-      );
-    } catch (alertError) {
-      
-      console.error("Failed to load alerts after trace:", alertError);
-    }
-
-    return {
-      ws: workspace,
-      alert,
-      source: "live",
-    };
-  } finally {
-    clearTimeout(timer);
+  return {
+    ws,
+    alert,
+    source: "live" as const,
   }
 }
+
 
 export async function getWorkspaces(limit = 100): Promise<Workspace[]> {
   return request<Workspace[]>(`/workspaces?limit=${limit}`);
