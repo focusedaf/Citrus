@@ -659,10 +659,9 @@ async def verify_evidence_endpoint(trace_id: int):
         "collected_at": bundle.get("collected_at"),
     }
 
-
 @app.get("/report/{trace_id}")
 async def get_report(trace_id: int):
-    blob_path = f"reports/report_{trace_id}.pdf"
+    blob_path = f"citrus/reports/report_{trace_id}.pdf"
 
     try:
         result = await get_blob(blob_path)
@@ -679,7 +678,6 @@ async def get_report(trace_id: int):
             "Content-Disposition": f"inline; filename=report_{trace_id}.pdf"
         },
     )
-
 
 @app.get("/reports")
 def reports():
