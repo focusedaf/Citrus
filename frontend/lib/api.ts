@@ -541,8 +541,19 @@ export async function getReport(traceId: number) {
   return res.blob();
 }
 
-export async function getReports(limit = 100) {
-  return request(`/reports?limit=${limit}`);
+export interface ReportRecord {
+  trace_id: number;
+  address: string;
+  chain_id: number;
+  risk: {
+    score: number;
+    level: string;
+  };
+  created_at: number;
+}
+
+export async function getReports(limit = 100): Promise<ReportRecord[]> {
+  return request<ReportRecord[]>(`/reports?limit=${limit}`);
 }
 
 export async function getTraces(limit = 50) {
