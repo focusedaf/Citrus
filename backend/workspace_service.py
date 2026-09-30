@@ -158,10 +158,13 @@ def get_workspace(workspace_id):
     return workspace_dict(trace, ws) if trace else None
 
 
-def list_workspaces(limit=100):
+def list_workspaces(limit=20):
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM workspaces ORDER BY created_at DESC LIMIT %s", (limit,))
+        cur.execute(
+            "SELECT * FROM workspaces ORDER BY created_at DESC LIMIT %s",
+            (min(limit, 20),),
+        )
         rows = cur.fetchall(); cols = [d[0] for d in cur.description]
     result=[]
     for row in rows:
