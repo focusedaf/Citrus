@@ -120,14 +120,7 @@ const emptyStats: DashboardStats = {
   top_exchanges: [],
 };
 
-/*
- * The backend response is runtime data, so we cannot assume
- * every nested object exists just because the TypeScript type
- * says it does.
- *
- * Normalize it once here so the rest of the dashboard can
- * safely use stats.entity_counts.vasp, etc.
- */
+
 function normalizeDashboardStats(value: unknown): DashboardStats {
   if (!value || typeof value !== "object") {
     return emptyStats;
@@ -242,12 +235,7 @@ export default function DashboardPage() {
         const data = await getDashboardStats(30);
 
         if (!cancelled) {
-          /*
-           * Never put raw backend JSON directly into
-           * dashboard state.
-           *
-           * Normalize nested fields first.
-           */
+         
           setStats(normalizeDashboardStats(data));
         }
       } catch (error) {
@@ -260,10 +248,7 @@ export default function DashboardPage() {
               : "Failed to load dashboard statistics",
           );
 
-          /*
-           * Keep the dashboard renderable even when
-           * the statistics endpoint fails.
-           */
+         
           setStats(emptyStats);
         }
       } finally {
@@ -284,13 +269,6 @@ export default function DashboardPage() {
 
   const openAlerts = alerts.filter((a) => !a.acknowledged);
 
-  /*
-   * Build the risk trend entirely on the frontend.
-   *
-   * No backend changes are required.
-   * Workspace creation timestamps are grouped by day
-   * and separated according to their risk level.
-   */
   const trendData = React.useMemo(() => {
     const today = new Date();
 
