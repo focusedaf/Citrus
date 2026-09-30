@@ -1,5 +1,4 @@
 import { ME, MEMBERS } from "./mock-data";
-
 import { levelFromScore } from "./format";
 
 import type {
@@ -16,7 +15,6 @@ interface TraceResponse {
   trace_id: number;
   workspace_id: string;
   address: string;
-
   edges: {
     from: string;
     to: string;
@@ -29,7 +27,6 @@ interface TraceResponse {
     is_spoofed_token?: boolean;
     function_name?: string;
   }[];
-
   tags: Record<
     string,
     {
@@ -38,7 +35,6 @@ interface TraceResponse {
       confidence?: string;
     } | null
   >;
-
   summary?: {
     reported_address?: string;
     chain?: string;
@@ -46,7 +42,6 @@ interface TraceResponse {
     unique_counterparties?: number;
     max_trace_depth?: number;
     assets_observed?: string[];
-
     entity_findings?: {
       vasp?: string[] | string;
       bridge?: string[] | string;
@@ -54,23 +49,18 @@ interface TraceResponse {
       known_contracts?: string[] | string;
       unidentified_wallets?: number;
     };
-
     spoofed_tokens_detected?: string[] | string;
     cross_chain_activity?: string[] | string;
   };
-
   risk: {
     score: number;
     level: string;
     reasons: string[];
   };
-
   alert_raised: string | null;
-
   report_url?: string | null;
   graph_url?: string | null;
   evidence_url?: string | null;
-
   blob_artifacts?: {
     report: string | null;
     graph: string | null;
@@ -102,6 +92,7 @@ const CHAIN_NAMES: Record<number, string> = {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
+    cache: "no-store",
     headers: {
       "Content-Type": "application/json",
       ...(options?.headers ?? {}),
@@ -120,7 +111,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   return res.json();
 }
-
 
 export function fromTraceResponse(
   r: TraceResponse,
@@ -193,30 +183,19 @@ export function fromTraceResponse(
     nodes,
     edges,
     reasons: r.risk?.reasons ?? [],
-
     summary: {
       transactions: summary.transactions_analyzed ?? 0,
-
       counterparties: summary.unique_counterparties ?? 0,
-
       depth: summary.max_trace_depth ?? 0,
-
       assets: summary.assets_observed ?? [],
-
       vasps: arr(entityFindings.vasp),
-
       bridges: arr(entityFindings.bridge),
-
       mixers: arr(entityFindings.mixer),
-
       spoofed: arr(summary.spoofed_tokens_detected),
-
       crossChain: arr(summary.cross_chain_activity),
     },
-
     evidenceHash: "",
     comments: [],
-
     activity: [
       {
         id: "a0",
@@ -225,9 +204,7 @@ export function fromTraceResponse(
         text: `ran live trace #${r.trace_id}`,
       },
     ],
-
     tasks: [],
-
     reports: r.blob_artifacts?.report
       ? [
           {
@@ -331,9 +308,7 @@ export async function runTrace(
           ws.address &&
           item.address.toLowerCase() === ws.address.toLowerCase()),
     );
-  } catch {
-    // Trace/workspace should still work if alert loading fails.
-  }
+  } catch {}
 
   return {
     ws,
@@ -341,7 +316,6 @@ export async function runTrace(
     source: "live" as const,
   };
 }
-
 
 export async function getWorkspaces(limit = 100): Promise<Workspace[]> {
   return request<Workspace[]>(`/workspaces?limit=${limit}`);
@@ -418,9 +392,9 @@ export async function toggleTask(
   actor = ME,
 ): Promise<Workspace> {
   return request<Workspace>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/tasks/${encodeURIComponent(
-      taskId,
-    )}?actor=${encodeURIComponent(actor)}`,
+    `/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/tasks/${encodeURIComponent(taskId)}?actor=${encodeURIComponent(actor)}`,
     {
       method: "PATCH",
     },
@@ -484,9 +458,9 @@ export async function addNodeNote(
   actor = ME,
 ): Promise<Workspace> {
   return request<Workspace>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/nodes/${encodeURIComponent(
-      address,
-    )}/notes`,
+    `/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/nodes/${encodeURIComponent(address)}/notes`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -522,7 +496,9 @@ export function getGraphUrl(traceId: number): string {
 }
 
 export async function getTraceGraph(traceId: number) {
-  const res = await fetch(`${API_URL}/graph/${traceId}`);
+  const res = await fetch(`${API_URL}/graph/${traceId}`, {
+    cache: "no-store",
+  });
 
   if (!res.ok) {
     throw new Error(`Failed to load graph (${res.status})`);
@@ -532,7 +508,9 @@ export async function getTraceGraph(traceId: number) {
 }
 
 export async function getEvidence(traceId: number) {
-  const res = await fetch(`${API_URL}/evidence/${traceId}`);
+  const res = await fetch(`${API_URL}/evidence/${traceId}`, {
+    cache: "no-store",
+  });
 
   if (!res.ok) {
     throw new Error(`Failed to load evidence (${res.status})`);
@@ -552,7 +530,9 @@ export async function verifyEvidence(traceId: number): Promise<{
 }
 
 export async function getReport(traceId: number) {
-  const res = await fetch(`${API_URL}/report/${traceId}`);
+  const res = await fetch(`${API_URL}/report/${traceId}`, {
+    cache: "no-store",
+  });
 
   if (!res.ok) {
     throw new Error(`Failed to load report (${res.status})`);

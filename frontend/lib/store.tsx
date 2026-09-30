@@ -108,7 +108,6 @@ function withWs(
 ): State {
   return {
     ...state,
-
     workspaces: state.workspaces.map((workspace) =>
       workspace.id === id ? fn(workspace) : workspace,
     ),
@@ -117,7 +116,6 @@ function withWs(
 
 const log = (workspace: Workspace, text: string): Workspace => ({
   ...workspace,
-
   activity: [
     {
       id: uid(),
@@ -163,19 +161,24 @@ function reducer(state: State, action: Action): State {
               workspace.id === action.ws.id ? action.ws : workspace,
             )
           : [action.ws, ...state.workspaces],
-
         alerts: mergedAlerts,
       };
     }
 
-    case "setWorkspace":
+    case "setWorkspace": {
+      const exists = state.workspaces.some(
+        (workspace) => workspace.id === action.ws.id,
+      );
+
       return {
         ...state,
-
-        workspaces: state.workspaces.map((workspace) =>
-          workspace.id === action.ws.id ? action.ws : workspace,
-        ),
+        workspaces: exists
+          ? state.workspaces.map((workspace) =>
+              workspace.id === action.ws.id ? action.ws : workspace,
+            )
+          : [action.ws, ...state.workspaces],
       };
+    }
 
     case "setAlerts":
       return {
@@ -183,15 +186,11 @@ function reducer(state: State, action: Action): State {
         alerts: action.alerts ?? [],
       };
 
-   
-
     case "comment":
       return withWs(state, action.id, (workspace) => ({
         ...log(workspace, "commented on the case"),
-
         comments: [
           ...(workspace.comments ?? []),
-
           {
             id: uid(),
             by: ME,
@@ -210,7 +209,6 @@ function reducer(state: State, action: Action): State {
     case "toggleTask":
       return withWs(state, action.id, (workspace) => ({
         ...workspace,
-
         tasks: (workspace.tasks ?? []).map((task) =>
           task.id === action.taskId
             ? {
@@ -224,10 +222,8 @@ function reducer(state: State, action: Action): State {
     case "addTask":
       return withWs(state, action.id, (workspace) => ({
         ...log(workspace, `added task "${action.text}"`),
-
         tasks: [
           ...(workspace.tasks ?? []),
-
           {
             id: uid(),
             text: action.text,
@@ -250,7 +246,6 @@ function reducer(state: State, action: Action): State {
             workspace,
             `invited ${member?.name ?? "a collaborator"} to the workspace`,
           ),
-
           members: [...workspace.members, action.member],
         };
       });
@@ -258,7 +253,6 @@ function reducer(state: State, action: Action): State {
     case "ack":
       return {
         ...state,
-
         alerts: state.alerts.map((alert) =>
           alert.id === action.alertId
             ? {
@@ -275,7 +269,6 @@ function reducer(state: State, action: Action): State {
           workspace,
           `flagged ${action.node.slice(0, 10)}… for freeze request`,
         ),
-
         nodes: workspace.nodes.map((node) =>
           node.id === action.node
             ? {
@@ -289,15 +282,12 @@ function reducer(state: State, action: Action): State {
     case "noteNode":
       return withWs(state, action.id, (workspace) => ({
         ...log(workspace, `annotated ${action.node.slice(0, 10)}…`),
-
         nodes: workspace.nodes.map((node) =>
           node.id === action.node
             ? {
                 ...node,
-
                 notes: [
                   ...(node.notes ?? []),
-
                   {
                     by: ME,
                     text: action.text,
@@ -325,7 +315,6 @@ const Ctx = React.createContext<{
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, reducerDispatch] = React.useReducer(reducer, initial);
-
   const [ready, setReady] = React.useState(false);
 
   const dispatch = React.useCallback(async (action: Action) => {
@@ -434,7 +423,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         case "genReport": {
           await generateReport(action.id);
 
-         
           const workspaces = await getWorkspaces(100);
 
           const workspace = workspaces.find((item) => item.id === action.id);
@@ -470,7 +458,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     async function loadData() {
       try {
-       
         const [workspaces, alerts] = await Promise.all([
           getWorkspaces(100),
           getAlerts(500),
@@ -479,7 +466,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         if (!cancelled) {
           reducerDispatch({
             type: "hydrate",
-
             state: {
               workspaces,
               alerts,
