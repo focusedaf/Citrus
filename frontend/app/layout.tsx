@@ -1,21 +1,32 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+
+import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+
 import "./globals.css";
 
 import { AppSidebar } from "@/components/app-sidebar";
+
 import { SiteHeader } from "@/components/site-header";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+
+import {
+  SidebarInset,
+  SidebarProvider,
+} from "@/components/ui/sidebar";
+
 import { Toaster } from "@/components/ui/sonner";
+
 import { StoreProvider } from "@/lib/store";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetBrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -23,11 +34,19 @@ export const metadata: Metadata = {
   description: "typeshit",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`
+        dark
+        ${spaceGrotesk.variable}
+        ${jetBrainsMono.variable}
+        h-full
+        antialiased
+      `}
     >
       <body className="min-h-full flex flex-col">
         <StoreProvider>
@@ -40,13 +59,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             }
           >
             <AppSidebar variant="inset" />
+
             <SidebarInset>
               <SiteHeader />
+
               <div className="@container/main flex flex-1 flex-col gap-4 p-4 lg:p-6">
                 {children}
               </div>
             </SidebarInset>
           </SidebarProvider>
+
           <Toaster theme="dark" />
         </StoreProvider>
       </body>

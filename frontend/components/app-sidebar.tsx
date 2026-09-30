@@ -1,10 +1,12 @@
 "use client";
 
 import * as React from "react";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { NavUser } from "@/components/nav-user";
+
 import {
   Sidebar,
   SidebarContent,
@@ -38,7 +40,6 @@ export function AppSidebar(
 ) {
   const pathname = usePathname() ?? "";
   const { state } = useStore();
-
   const [reportCount, setReportCount] = React.useState(0);
 
   /*
@@ -132,43 +133,149 @@ export function AppSidebar(
       collapsible="offcanvas"
       {...props}
     >
-      <SidebarHeader>
+      <SidebarHeader className="px-3 pt-3">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
               render={<Link href="/dashboard" />}
+              className="
+                group
+                relative
+                h-[58px]
+                rounded-xl
+                border border-transparent
+                px-2.5
+                transition-all
+                duration-200
+                hover:border-cyan-400/10
+                hover:bg-cyan-400/[0.035]
+              "
             >
-              <div className="flex size-8 items-center justify-center rounded-lg bg-amber-400 text-lg text-black">
-                🍋
+              <div
+                className="
+                  relative
+                  flex
+                  size-9
+                  shrink-0
+                  items-center
+                  justify-center
+                  overflow-hidden
+                  rounded-xl
+                  bg-gradient-to-br
+                  from-amber-300
+                  via-yellow-400
+                  to-orange-400
+                  text-lg
+                  shadow-[0_0_22px_rgba(251,191,36,0.16)]
+                  ring-1
+                  ring-white/10
+                "
+              >
+                <span className="relative z-10">🍋</span>
+
+                <div
+                  className="
+                    absolute
+                    inset-0
+                    bg-gradient-to-br
+                    from-white/25
+                    via-transparent
+                    to-transparent
+                  "
+                />
               </div>
 
-              <div className="grid flex-1 text-left leading-tight">
-                <span className="text-base font-semibold">
+              <div className="grid min-w-0 flex-1 text-left leading-tight">
+                <span
+                  className="
+                    text-[15px]
+                    font-semibold
+                    tracking-tight
+                    text-slate-100
+                  "
+                >
                   Citrus
                 </span>
 
-                <span className="text-[11px] text-muted-foreground">
+                <span
+                  className="
+                    mt-0.5
+                    truncate
+                    text-[10px]
+                    font-medium
+                    tracking-[0.02em]
+                    text-slate-500
+                  "
+                >
                   Crypto Fraud Attribution
                 </span>
               </div>
+
+              <div
+                className="
+                  absolute
+                  right-2
+                  top-2
+                  size-1.5
+                  rounded-full
+                  bg-cyan-400/70
+                  shadow-[0_0_8px_rgba(34,211,238,0.6)]
+                  opacity-0
+                  transition-opacity
+                  group-hover:opacity-100
+                "
+              />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent className="flex flex-col gap-2">
+      <SidebarContent className="px-2">
+        <SidebarGroup className="pt-4">
+          <SidebarGroupContent className="flex flex-col gap-3">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   tooltip="New investigation"
                   render={<Link href="/trace" />}
-                  className="min-w-8 bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                  className="
+                    relative
+                    min-w-8
+                    overflow-hidden
+                    rounded-xl
+                    border
+                    border-cyan-300/20
+                    bg-gradient-to-r
+                    from-cyan-500
+                    via-sky-500
+                    to-blue-500
+                    text-white
+                    shadow-[0_0_24px_rgba(14,165,233,0.16)]
+                    transition-all
+                    duration-200
+                    hover:border-cyan-200/30
+                    hover:brightness-110
+                    hover:shadow-[0_0_30px_rgba(14,165,233,0.25)]
+                  "
                 >
-                  <RadarIcon />
-                  <span>New Investigation</span>
+                  <div
+                    className="
+                      pointer-events-none
+                      absolute
+                      inset-0
+                      bg-gradient-to-r
+                      from-white/10
+                      via-transparent
+                      to-transparent
+                    "
+                  />
+
+                  <RadarIcon className="relative size-[17px]" />
+
+                  <span className="relative font-semibold">
+                    New Investigation
+                  </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -180,14 +287,46 @@ export function AppSidebar(
                     tooltip={item.title}
                     isActive={isActive(item.url)}
                     render={<Link href={item.url} />}
+                    className="
+                      group
+                      relative
+                      h-9
+                      rounded-lg
+                      text-slate-400
+                      transition-all
+                      duration-200
+                      hover:bg-cyan-400/[0.055]
+                      hover:text-slate-200
+                    "
                   >
-                    <item.icon />
-                    <span>{item.title}</span>
+                    <item.icon
+                      className="
+                        size-[17px]
+                        transition-colors
+                        group-hover:text-cyan-300
+                      "
+                    />
+
+                    <span className="font-medium">
+                      {item.title}
+                    </span>
                   </SidebarMenuButton>
 
                   {typeof item.badge === "number" &&
                     item.badge > 0 && (
-                      <SidebarMenuBadge>
+                      <SidebarMenuBadge
+                        className="
+                          right-2
+                          rounded-md
+                          border
+                          border-cyan-400/10
+                          bg-cyan-400/[0.055]
+                          px-1.5
+                          text-[10px]
+                          font-semibold
+                          text-slate-400
+                        "
+                      >
                         {item.badge}
                       </SidebarMenuBadge>
                     )}
@@ -197,8 +336,18 @@ export function AppSidebar(
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>
+        <SidebarGroup className="pt-1">
+          <SidebarGroupLabel
+            className="
+              px-2
+              pb-2
+              text-[10px]
+              font-semibold
+              uppercase
+              tracking-[0.12em]
+              text-slate-600
+            "
+          >
             Recent workspaces
           </SidebarGroupLabel>
 
@@ -251,10 +400,27 @@ export function AppSidebar(
                             href={`/workspaces/${workspaceId}`}
                           />
                         }
+                        className="
+                          group
+                          h-9
+                          rounded-lg
+                          text-slate-400
+                          transition-all
+                          duration-200
+                          hover:bg-cyan-400/[0.045]
+                          hover:text-slate-200
+                        "
                       >
-                        <SearchCheckIcon />
+                        <SearchCheckIcon
+                          className="
+                            size-[16px]
+                            text-slate-500
+                            transition-colors
+                            group-hover:text-cyan-300
+                          "
+                        />
 
-                        <span className="truncate">
+                        <span className="truncate text-[12px] font-medium">
                           {workspaceId} ·{" "}
                           {workspaceLabel}
                         </span>
@@ -278,7 +444,7 @@ export function AppSidebar(
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup className="mt-auto">
+        <SidebarGroup className="mt-auto pb-2">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -288,9 +454,18 @@ export function AppSidebar(
                   render={
                     <Link href="/settings" />
                   }
+                  className="
+                    h-9
+                    rounded-lg
+                    text-slate-400
+                    hover:bg-cyan-400/[0.045]
+                    hover:text-slate-200
+                  "
                 >
-                  <Settings2Icon />
-                  <span>Settings</span>
+                  <Settings2Icon className="size-[17px]" />
+                  <span className="font-medium">
+                    Settings
+                  </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
@@ -300,9 +475,18 @@ export function AppSidebar(
                   render={
                     <Link href="/settings" />
                   }
+                  className="
+                    h-9
+                    rounded-lg
+                    text-slate-400
+                    hover:bg-cyan-400/[0.045]
+                    hover:text-slate-200
+                  "
                 >
-                  <CircleHelpIcon />
-                  <span>Help</span>
+                  <CircleHelpIcon className="size-[17px]" />
+                  <span className="font-medium">
+                    Help
+                  </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -310,7 +494,7 @@ export function AppSidebar(
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="border-t border-cyan-400/[0.06] px-2 py-2">
         <NavUser
           user={{
             name: "Insp. Aarav Mehta",
