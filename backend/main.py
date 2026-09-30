@@ -2,7 +2,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import json
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, Response
@@ -23,6 +23,9 @@ from db import (
     get_all_traces,
     get_all_alerts,
     get_trace_by_id,
+    claim_trace_request,
+    complete_trace_request,
+    fail_trace_request,
 )
 from report_generator import generate_pdf_report
 from evidence import compute_hash
@@ -155,14 +158,19 @@ def root():
         },
     }
 
-
 @app.post("/trace")
 def trace(
     address: str,
     chain_id: int = DEFAULT_CHAIN_ID,
     max_hops: int = 3,
     check_cross_chain: bool = True,
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+    ),
 ):
+    trace_id = None
+
     try:
         address = address.lower().strip()
 
@@ -197,12 +205,60 @@ def trace(
                 detail="No blockchain data provider is configured.",
             )
 
+       
+
+        if idempotency_key:
+            idempotency_key = idempotency_key.strip()
+
+            if not idempotency_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Idempotency-Key cannot be empty.",
+                )
+
+            request_fingerprint = json.dumps(
+                {
+                    "address": address,
+                    "chain_id": chain_id,
+                    "max_hops": max_hops,
+                    "check_cross_chain": check_cross_chain,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+            try:
+                claim = claim_trace_request(
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=str(exc),
+                )
+
+            if claim["status"] == "completed":
+                return claim["response"]
+
+            if claim["status"] == "processing":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "This trace request is already being processed.",
+                        "trace_id": claim.get("trace_id"),
+                    },
+                )
+
+
         edges, incoming_timestamps = trace_wallet(
             address,
             API_KEY,
             chain_id=chain_id,
             max_hops=max_hops,
         )
+
+
 
         if not edges:
             risk = {
@@ -212,20 +268,21 @@ def trace(
             }
 
             trace_id = save_trace(
-                    address=address,
-                    chain_id=chain_id,
-                    summary={
-                        "chain": _chain_name(chain_id),
-                        "address": address,
-                        "nodes": 1,
-                        "edges": 0,
-                    },
-                    edges=[],
-                    risk=risk,
-                    tags={},
-                    evidence_hash=None,
-                    max_hops=max_hops,
-                    )
+                address=address,
+                chain_id=chain_id,
+                summary={
+                    "chain": _chain_name(chain_id),
+                    "address": address,
+                    "nodes": 1,
+                    "edges": 0,
+                },
+                edges=[],
+                risk=risk,
+                tags={},
+                evidence_hash=None,
+                max_hops=max_hops,
+                idempotency_key=idempotency_key,
+            )
 
             workspace_id = ensure_workspace(
                 trace_id=trace_id,
@@ -234,7 +291,7 @@ def trace(
                 risk=risk,
             )
 
-            return {
+            response = {
                 "trace_id": trace_id,
                 "workspace_id": workspace_id,
                 "address": address,
@@ -253,7 +310,20 @@ def trace(
                 "cross_chain": [],
             }
 
-        G = build_graph(edges, start_address=address)
+            if idempotency_key:
+                complete_trace_request(
+                    idempotency_key=idempotency_key,
+                    trace_id=trace_id,
+                    response=response,
+                )
+
+            return response
+
+
+        G = build_graph(
+            edges,
+            start_address=address,
+        )
 
         tags = tag_all(
             address,
@@ -292,6 +362,7 @@ def trace(
             cross_chain=cross_chain,
         )
 
+
         serialized_edges = []
 
         for edge in edges:
@@ -321,15 +392,18 @@ def trace(
         evidence_hash = compute_hash(evidence_core)
 
         trace_id = save_trace(
-        address=address,
-        chain_id=chain_id,
-        summary=summary,
-        edges=serialized_edges,
-        risk=risk,
-        tags=tags,
-        evidence_hash=evidence_hash,
-        max_hops=max_hops,
+            address=address,
+            chain_id=chain_id,
+            summary=summary,
+            edges=serialized_edges,
+            risk=risk,
+            tags=tags,
+            evidence_hash=evidence_hash,
+            max_hops=max_hops,
+            idempotency_key=idempotency_key,
         )
+
+        
 
         evidence_blob_url = upload_evidence(
             trace_id,
@@ -340,9 +414,9 @@ def trace(
         )
 
         graph_html = render_graph(
-        G,
-        tags=tags,
-        start_address=address,
+            G,
+            tags=tags,
+            start_address=address,
         )
 
         graph_blob_url = upload_graph(
@@ -355,8 +429,8 @@ def trace(
             risk=risk,
             trace_id=trace_id,
             evidence={
-            "filename": f"evidence_{trace_id}.json",
-            "hash": evidence_hash,
+                "filename": f"evidence_{trace_id}.json",
+                "hash": evidence_hash,
             },
         )
 
@@ -365,6 +439,8 @@ def trace(
             report_pdf,
         )
 
+        
+
         alert = raise_alert(
             address,
             risk,
@@ -372,12 +448,12 @@ def trace(
         )
 
         if alert:
-           save_alert(
-            trace_id=trace_id,
-            address=address,
-            risk_level=risk["level"],
-            message=alert,
-        )
+            save_alert(
+                trace_id=trace_id,
+                address=address,
+                risk_level=risk["level"],
+                message=alert,
+            )
 
         workspace_id = ensure_workspace(
             trace_id=trace_id,
@@ -386,7 +462,7 @@ def trace(
             risk=risk,
         )
 
-        return {
+        response = {
             "trace_id": trace_id,
             "workspace_id": workspace_id,
             "address": address,
@@ -404,18 +480,39 @@ def trace(
                 "report": report_blob_url,
             },
         }
+
         
+        if idempotency_key:
+            complete_trace_request(
+                idempotency_key=idempotency_key,
+                trace_id=trace_id,
+                response=response,
+            )
+
+        return response
+
     except HTTPException:
         raise
+
     except Exception as exc:
         import traceback
+
+        if idempotency_key and trace_id is None:
+            try:
+                fail_trace_request(idempotency_key)
+            except Exception:
+                pass
+
         print("\n========== CITRUS TRACE CRASH ==========")
         print(f"address={address}")
         print(f"chain_id={chain_id}")
         print(f"max_hops={max_hops}")
+        print(f"idempotency_key={idempotency_key}")
+        print(f"trace_id={trace_id}")
         print(f"error={repr(exc)}")
         traceback.print_exc()
         print("========== END CITRUS TRACE CRASH ==========\n")
+
         raise
 
 @app.post("/ingest-complaint")
@@ -609,8 +706,14 @@ def members():
 
 
 @app.get("/workspaces")
-def workspaces():
-    return list_workspaces()
+def workspaces(limit: int = 20):
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be between 1 and 100",
+        )
+
+    return list_workspaces(limit)
 
 
 @app.get("/workspaces/{workspace_id}")

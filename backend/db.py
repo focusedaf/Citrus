@@ -74,17 +74,20 @@ def init_db():
                 )
             """)
 
-            # --- Migrations for existing databases -------------------------
-            # ADD COLUMN IF NOT EXISTS is safe to re-run and never touches
-            # existing rows/columns, so this won't break a DB you already
-            # have data in.
             cur.execute("""
                 ALTER TABLE traces
                 ADD COLUMN IF NOT EXISTS evidence_hash TEXT
             """)
 
-            cur.execute("ALTER TABLE traces ADD COLUMN IF NOT EXISTS tags_json JSONB")
-            cur.execute("ALTER TABLE alerts ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("""
+                ALTER TABLE traces
+                ADD COLUMN IF NOT EXISTS tags_json JSONB
+            """)
+
+            cur.execute("""
+                ALTER TABLE alerts
+                ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT FALSE
+            """)
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspaces (
@@ -101,6 +104,7 @@ def init_db():
                     lead TEXT NOT NULL DEFAULT 'm1'
                 )
             """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspace_members (
                     workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -108,6 +112,7 @@ def init_db():
                     PRIMARY KEY (workspace_id, member_id)
                 )
             """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspace_comments (
                     id TEXT PRIMARY KEY,
@@ -117,6 +122,7 @@ def init_db():
                     at BIGINT NOT NULL
                 )
             """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspace_tasks (
                     id TEXT PRIMARY KEY,
@@ -127,6 +133,7 @@ def init_db():
                     created_at BIGINT NOT NULL
                 )
             """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspace_activity (
                     id BIGSERIAL PRIMARY KEY,
@@ -136,6 +143,7 @@ def init_db():
                     at BIGINT NOT NULL
                 )
             """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS workspace_nodes (
                     workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -143,6 +151,19 @@ def init_db():
                     flagged BOOLEAN NOT NULL DEFAULT FALSE,
                     notes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                     PRIMARY KEY (workspace_id, address)
+                )
+            """)
+
+           
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trace_requests (
+                    idempotency_key TEXT PRIMARY KEY,
+                    request_fingerprint TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'processing',
+                    trace_id INTEGER REFERENCES traces(id) ON DELETE SET NULL,
+                    response_json JSONB,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL
                 )
             """)
 
@@ -170,7 +191,226 @@ def init_db():
             cur.close()
 
 
-def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None, tags=None,  max_hops=None):
+def claim_trace_request(
+    idempotency_key,
+    request_fingerprint,
+):
+    """
+    Atomically claims an idempotency key.
+
+    Returns:
+        {
+            "status": "new"
+        }
+
+    for the request that owns processing.
+
+    Returns:
+        {
+            "status": "completed",
+            "response": {...}
+        }
+
+    when the same request was already completed.
+
+    Returns:
+        {
+            "status": "processing",
+            "trace_id": ...
+        }
+
+    when another request with the same key is currently processing.
+    """
+
+    with get_connection() as conn:
+        cur = conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        )
+
+        try:
+            now = int(time.time())
+
+            cur.execute(
+                """
+                INSERT INTO trace_requests (
+                    idempotency_key,
+                    request_fingerprint,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, 'processing', %s, %s)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING idempotency_key
+                """,
+                (
+                    idempotency_key,
+                    request_fingerprint,
+                    now,
+                    now,
+                ),
+            )
+
+            inserted = cur.fetchone()
+
+            if inserted:
+                conn.commit()
+
+                return {
+                    "status": "new",
+                }
+
+            cur.execute(
+                """
+                SELECT
+                    idempotency_key,
+                    request_fingerprint,
+                    status,
+                    trace_id,
+                    response_json
+                FROM trace_requests
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            )
+
+            existing = cur.fetchone()
+
+            if existing is None:
+                conn.rollback()
+
+                return {
+                    "status": "new",
+                }
+
+            if existing["request_fingerprint"] != request_fingerprint:
+                conn.rollback()
+
+                raise ValueError(
+                    "Idempotency-Key was already used for a different trace request."
+                )
+
+            if (
+                existing["status"] == "completed"
+                and existing["response_json"] is not None
+            ):
+                conn.commit()
+
+                return {
+                    "status": "completed",
+                    "response": existing["response_json"],
+                }
+
+            conn.commit()
+
+            return {
+                "status": "processing",
+                "trace_id": existing["trace_id"],
+            }
+
+        finally:
+            cur.close()
+
+
+def attach_trace_to_request(
+    idempotency_key,
+    trace_id,
+):
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        try:
+            cur.execute(
+                """
+                UPDATE trace_requests
+                SET
+                    trace_id = %s,
+                    updated_at = %s
+                WHERE idempotency_key = %s
+                """,
+                (
+                    trace_id,
+                    int(time.time()),
+                    idempotency_key,
+                ),
+            )
+
+            conn.commit()
+
+        finally:
+            cur.close()
+
+
+def complete_trace_request(
+    idempotency_key,
+    trace_id,
+    response,
+):
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        try:
+            cur.execute(
+                """
+                UPDATE trace_requests
+                SET
+                    status = 'completed',
+                    trace_id = %s,
+                    response_json = %s,
+                    updated_at = %s
+                WHERE idempotency_key = %s
+                """,
+                (
+                    trace_id,
+                    psycopg2.extras.Json(response),
+                    int(time.time()),
+                    idempotency_key,
+                ),
+            )
+
+            conn.commit()
+
+        finally:
+            cur.close()
+
+
+def fail_trace_request(idempotency_key):
+    """
+    Only used when the trace failed before a trace row was created.
+
+    This lets the same logical request be retried safely.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        try:
+            cur.execute(
+                """
+                DELETE FROM trace_requests
+                WHERE idempotency_key = %s
+                  AND trace_id IS NULL
+                  AND status = 'processing'
+                """,
+                (idempotency_key,),
+            )
+
+            conn.commit()
+
+        finally:
+            cur.close()
+
+
+def save_trace(
+    address,
+    chain_id,
+    summary,
+    edges,
+    risk,
+    evidence_hash=None,
+    tags=None,
+    max_hops=None,
+    idempotency_key=None,
+):
     with get_connection() as conn:
         cur = conn.cursor()
 
@@ -205,6 +445,23 @@ def save_trace(address, chain_id, summary, edges, risk, evidence_hash=None, tags
             )
 
             trace_id = cur.fetchone()[0]
+
+            if idempotency_key:
+                cur.execute(
+                    """
+                    UPDATE trace_requests
+                    SET
+                        trace_id = %s,
+                        updated_at = %s
+                    WHERE idempotency_key = %s
+                    """,
+                    (
+                        trace_id,
+                        int(time.time()),
+                        idempotency_key,
+                    ),
+                )
+
             conn.commit()
 
             return trace_id

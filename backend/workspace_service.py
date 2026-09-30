@@ -157,23 +157,130 @@ def get_workspace(workspace_id):
         trace = dict(zip(cols, row)) if row else None
     return workspace_dict(trace, ws) if trace else None
 
-
 def list_workspaces(limit=20):
+    limit = max(1, min(int(limit), 100))
+
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT * FROM workspaces ORDER BY created_at DESC LIMIT %s",
-            (min(limit, 20),),
-        )
-        rows = cur.fetchall(); cols = [d[0] for d in cur.description]
-    result=[]
-    for row in rows:
-        ws=dict(zip(cols,row))
-        with get_connection() as conn:
-            cur=conn.cursor(); cur.execute("SELECT * FROM traces WHERE id=%s", (ws["trace_id"],)); tr=cur.fetchone(); tc=[d[0] for d in cur.description]
-        if tr: result.append(workspace_dict(dict(zip(tc,tr)),ws))
-    return result
 
+        cur.execute(
+            """
+            SELECT
+                w.id,
+                w.trace_id,
+                w.title,
+                w.complaint_id,
+                w.source,
+                w.victim_state,
+                w.chain,
+                w.status,
+                w.amount_inr,
+                w.created_at,
+                w.lead,
+                t.address,
+                t.chain_id,
+                t.summary_json,
+                t.risk_score,
+                t.risk_level,
+                t.evidence_hash
+            FROM workspaces w
+            JOIN traces t
+                ON t.id = w.trace_id
+            ORDER BY w.created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+
+        rows = cur.fetchall()
+        columns = [d[0] for d in cur.description]
+
+    result = []
+
+    for row in rows:
+        data = dict(zip(columns, row))
+
+        summary = data["summary_json"] or {}
+        findings = summary.get("entity_findings") or {}
+
+        def as_list(value):
+            return value if isinstance(value, list) else []
+
+        result.append(
+            {
+                "id": data["id"],
+                "traceId": data["trace_id"],
+                "title": data["title"],
+                "complaintId": data["complaint_id"],
+                "source": data["source"],
+                "victimState": data["victim_state"],
+                "address": data["address"],
+                "chain": data["chain"],
+                "chainId": data["chain_id"],
+                "status": data["status"],
+                "riskScore": data["risk_score"] or 0,
+                "riskLevel": data["risk_level"] or "Low",
+                "amountInr": data["amount_inr"] or 0,
+                "createdAt": data["created_at"],
+                "lead": data["lead"],
+                "members": _members(data["id"]),
+                "nodes": [],
+                "edges": [],
+                "reasons": summary.get("risk_indicators") or [],
+                "summary": {
+                    "transactions": summary.get(
+                        "transactions_analyzed", 0
+                    ),
+                    "counterparties": summary.get(
+                        "unique_counterparties", 0
+                    ),
+                    "depth": summary.get(
+                        "max_trace_depth", 0
+                    ),
+                    "assets": summary.get(
+                        "assets_observed", []
+                    ),
+                    "vasps": as_list(
+                        findings.get("vasp")
+                    ),
+                    "bridges": as_list(
+                        findings.get("bridge")
+                    ),
+                    "mixers": as_list(
+                        findings.get("mixer")
+                    ),
+                    "spoofed": as_list(
+                        summary.get(
+                            "spoofed_tokens_detected"
+                        )
+                    ),
+                    "crossChain": as_list(
+                        summary.get(
+                            "cross_chain_activity"
+                        )
+                    ),
+                },
+                "evidenceHash": data["evidence_hash"] or "",
+                "comments": [],
+                "activity": [],
+                "tasks": [],
+                "reports": [
+                    {
+                        "id": f"r-{data['trace_id']}",
+                        "name": (
+                            f"Investigation report – "
+                            f"trace {data['trace_id']}.pdf"
+                        ),
+                        "at": data["created_at"],
+                        "by": data["lead"],
+                        "kind": "PDF",
+                    }
+                ],
+                "alerts": [],
+            }
+        )
+
+    return result
 
 def _activity(cur, wid, actor, text):
     cur.execute("INSERT INTO workspace_activity(workspace_id, by_member, text, at) VALUES (%s,%s,%s,%s)", (wid, actor, text, _now()))

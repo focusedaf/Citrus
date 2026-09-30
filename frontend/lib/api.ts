@@ -263,69 +263,74 @@ export async function runTrace(
   address: string,
   chainId = 1,
   maxHops = 3,
+  idempotencyKey?: string,
 ) {
   const params = new URLSearchParams({
     address,
     chain_id: String(chainId),
     max_hops: String(maxHops),
     check_cross_chain: "true",
-  })
+  });
+
+  const key =
+    idempotencyKey ??
+    (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const res = await fetch(`${API_URL}/trace?${params.toString()}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Idempotency-Key": key,
     },
     cache: "no-store",
-  })
+  });
 
-  const data = await res.json().catch(() => null)
+  const data = await res.json().catch(() => null);
 
   if (!res.ok) {
+    const detail = data?.detail;
+
+    if (res.status === 409 && typeof detail === "object" && detail?.message) {
+      throw new Error(
+        `${detail.message}${
+          detail.trace_id ? ` Trace ID: ${detail.trace_id}.` : ""
+        }`,
+      );
+    }
+
     throw new Error(
-      data?.detail ||
-        data?.message ||
-        `Trace failed with HTTP ${res.status}`,
-    )
+      typeof detail === "string"
+        ? detail
+        : data?.message || `Trace failed with HTTP ${res.status}`,
+    );
   }
 
   if (!data?.trace_id || !data?.workspace_id) {
-    throw new Error("Trace completed but no workspace was returned.")
+    throw new Error("Trace completed but no workspace was returned.");
   }
 
-  /*
-   * IMPORTANT:
-   * Do NOT reconstruct the Workspace from /trace.
-   *
-   * The backend already has the canonical workspace representation at:
-   * GET /workspaces/{workspace_id}
-   */
-  const ws = await getWorkspace(data.workspace_id)
+  const ws = await getWorkspace(data.workspace_id);
 
   if (!ws) {
     throw new Error(
       `Trace ${data.trace_id} completed, but workspace ${data.workspace_id} could not be loaded.`,
-    )
+    );
   }
 
-  /*
-   * Load the persisted alert instead of manufacturing an alert
-   * from the trace response.
-   */
-  let alert: Alert | undefined
+  let alert: Alert | undefined;
 
   try {
-    const alerts = await getAlerts(500)
+    const alerts = await getAlerts(500);
 
     alert = alerts.find(
       (item) =>
         item.workspaceId === ws.id ||
-        (
-          item.address &&
+        (item.address &&
           ws.address &&
-          item.address.toLowerCase() === ws.address.toLowerCase()
-        ),
-    )
+          item.address.toLowerCase() === ws.address.toLowerCase()),
+    );
   } catch {
     // Trace/workspace should still work if alert loading fails.
   }
@@ -334,7 +339,7 @@ export async function runTrace(
     ws,
     alert,
     source: "live" as const,
-  }
+  };
 }
 
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -39,6 +40,8 @@ export default function TracePage() {
   const router = useRouter();
   const { dispatch } = useStore();
 
+  const traceRequestKey = useRef<string | null>(null);
+
   const [address, setAddress] = React.useState("");
   const [hops, setHops] = React.useState("3");
   const [step, setStep] = React.useState(-1);
@@ -56,9 +59,16 @@ export default function TracePage() {
     setStep(0);
 
     try {
-      // Ethereum mainnet = chain ID 1.
-      // runTrace expects: address, chainId, maxHops.
-      const res = await runTrace(address.trim(), 1, Number(hops));
+      if (!traceRequestKey.current) {
+        traceRequestKey.current = crypto.randomUUID();
+      }
+
+      const res = await runTrace(
+        address.trim(),
+        1,
+        Number(hops),
+        traceRequestKey.current,
+      );
 
       clearInterval(ticker);
       setStep(STEPS.length);
@@ -70,6 +80,8 @@ export default function TracePage() {
       });
 
       toast.success("Live trace complete");
+
+      traceRequestKey.current = null;
 
       router.push(`/workspaces/${res.ws.id}`);
     } catch (error) {
