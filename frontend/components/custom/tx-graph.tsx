@@ -5,12 +5,12 @@ import type { EntityType, GraphEdge, GraphNode } from "@/lib/types";
 import { short } from "@/lib/format";
 
 export const ENTITY_COLOR: Record<EntityType, string> = {
-  reported: "#f5c518",
-  vasp: "#ef4444",
+  reported: "#facc15",
+  vasp: "#f43f5e",
   bridge: "#f59e0b",
   mixer: "#a855f7",
-  contract: "#94a3b8",
-  unknown: "#3b82f6",
+  contract: "#64748b",
+  unknown: "#06b6d4",
 };
 
 export const ENTITY_NAME: Record<EntityType, string> = {
@@ -25,13 +25,13 @@ export const ENTITY_NAME: Record<EntityType, string> = {
 const BEHAVIOR_COLOR = {
   hot: "#38bdf8",
   cold: "#8b5cf6",
-  active: "#22c55e",
+  active: "#10b981",
   unknown: "#64748b",
 };
 
-const FLOW_COLOR = "#5dade2";
-const FOCUS_COLOR = "#f5c518";
-const SPOOF_COLOR = "#ef4444";
+const FLOW_COLOR = "#38bdf8";
+const FOCUS_COLOR = "#facc15";
+const SPOOF_COLOR = "#f43f5e";
 const INTERACTION_COLOR = "#64748b";
 
 const COL_W = 260;
@@ -704,7 +704,7 @@ export function TxGraph({
   return (
     <div
       ref={wrap}
-      className="relative overflow-hidden rounded-lg border bg-[radial-gradient(circle_at_1px_1px,oklch(1_0_0/6%)_1px,transparent_0)] [background-size:22px_22px]"
+      className="relative overflow-hidden rounded-xl border border-cyan-500/20 bg-[#020713] bg-[radial-gradient(circle_at_1px_1px,rgba(6,182,212,0.12)_1px,transparent_0)] [background-size:24px_24px] shadow-2xl shadow-cyan-950/20"
       style={{ height }}
     >
       <svg
@@ -1052,17 +1052,18 @@ export function TxGraph({
         </g>
       </svg>
 
-      <div className="pointer-events-none absolute top-3 left-3 max-w-[calc(100%-24px)] rounded-md border bg-background/90 px-3 py-2 text-[11px] backdrop-blur">
-        <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+      <div className="pointer-events-none absolute top-3 left-3 max-w-[calc(100%-24px)] rounded-lg border border-cyan-500/20 bg-[#040e20]/85 px-3.5 py-2.5 text-[11px] backdrop-blur-md shadow-lg shadow-black/40 text-slate-300">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5">
           {(Object.keys(ENTITY_COLOR) as EntityType[]).map((type) => (
             <span key={type} className="flex items-center gap-1.5">
               <i
                 className="size-2.5 rounded-full"
                 style={{
                   background: ENTITY_COLOR[type],
+                  boxShadow: `0 0 6px ${ENTITY_COLOR[type]}66`,
                 }}
               />
-              {ENTITY_NAME[type]}
+              <span className="font-medium text-slate-300">{ENTITY_NAME[type]}</span>
             </span>
           ))}
 
@@ -1073,7 +1074,7 @@ export function TxGraph({
                 borderColor: BEHAVIOR_COLOR.hot,
               }}
             />
-            Hot behavior
+            <span className="text-slate-300">Hot behavior</span>
           </span>
 
           <span className="flex items-center gap-1.5">
@@ -1083,11 +1084,11 @@ export function TxGraph({
                 borderColor: BEHAVIOR_COLOR.cold,
               }}
             />
-            Cold behavior
+            <span className="text-slate-300">Cold behavior</span>
           </span>
         </div>
 
-        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 border-t pt-1.5 text-muted-foreground">
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-cyan-500/15 pt-2 text-slate-400">
           <span className="flex items-center gap-1.5">
             <i
               className="h-0 w-4 border-t-2"
@@ -1109,22 +1110,23 @@ export function TxGraph({
           </span>
 
           <span className="flex items-center gap-1.5">
-            <i className="h-0 w-4 border-t-2 border-dashed border-red-500" />
+            <i className="h-0 w-4 border-t-2 border-dashed border-rose-500" />
             Spoofed token
           </span>
         </div>
       </div>
 
-      <div className="absolute right-3 bottom-3 flex flex-col gap-1">
+      <div className="absolute right-3 bottom-3 flex flex-col gap-1.5">
         {[
-          ["+", () => zoom(1.2)],
-          ["−", () => zoom(0.83)],
-          ["⤢", fit],
-        ].map(([label, action]) => (
+          ["+", () => zoom(1.2), "Zoom In"],
+          ["−", () => zoom(0.83), "Zoom Out"],
+          ["⤢", fit, "Fit to Screen"],
+        ].map(([label, action, title]) => (
           <button
             key={label as string}
+            title={title as string}
             onClick={action as () => void}
-            className="size-7 rounded-md border bg-background/80 text-sm backdrop-blur hover:bg-accent"
+            className="flex size-7.5 items-center justify-center rounded-md border border-cyan-500/25 bg-[#06142a]/85 text-sm font-semibold text-slate-200 backdrop-blur-md transition-all hover:border-cyan-400/50 hover:bg-cyan-950/50 hover:text-cyan-300 active:scale-95 shadow-md"
             type="button"
           >
             {label as string}
@@ -1132,7 +1134,7 @@ export function TxGraph({
         ))}
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] text-[11px] text-muted-foreground">
+      <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-md border border-cyan-500/15 bg-[#040e20]/80 px-2.5 py-1 text-[11px] text-slate-400 backdrop-blur-sm">
         Click a node to highlight its upstream funding path · solid lines =
         value transfer · dashed lines = contract interaction · drag to pan ·
         scroll to zoom

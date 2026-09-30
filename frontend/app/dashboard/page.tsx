@@ -77,7 +77,7 @@ import { cn } from "@/lib/utils";
 const trendCfg = {
   critical: {
     label: "Critical",
-    color: "#ef4444",
+    color: "#f43f5e",
   },
   high: {
     label: "High",
@@ -89,7 +89,7 @@ const trendCfg = {
   },
   low: {
     label: "Low",
-    color: "#22c55e",
+    color: "#10b981",
   },
 } satisfies ChartConfig;
 
@@ -622,7 +622,7 @@ export default function DashboardPage() {
 
     vasp: {
       label: "Exchange / VASP",
-      color: "#ef4444",
+      color: "#f43f5e",
     },
 
     mixer: {
@@ -637,12 +637,12 @@ export default function DashboardPage() {
 
     contract: {
       label: "Contract",
-      color: "#94a3b8",
+      color: "#64748b",
     },
 
     unknown: {
       label: "Unidentified",
-      color: "#3b82f6",
+      color: "#06b6d4",
     },
   } satisfies ChartConfig;
 
@@ -692,21 +692,36 @@ export default function DashboardPage() {
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-4 *:data-[slot=card]:bg-linear-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
         {kpis.map((kpi) => {
           const Icon = kpi.icon;
 
           return (
             <Card
               key={kpi.label}
-              className="@container/card"
+              className={cn(
+                "@container/card relative overflow-hidden transition-all duration-300 hover:-translate-y-0.5",
+                kpi.danger
+                  ? "border-rose-500/25 bg-[linear-gradient(145deg,rgba(35,12,24,0.65),rgba(6,14,26,0.85))] shadow-[0_12px_40px_rgba(244,63,94,0.08)] hover:border-rose-500/40"
+                  : "border-cyan-400/[0.12] bg-[linear-gradient(145deg,rgba(10,26,48,0.72),rgba(3,11,23,0.85))] hover:border-cyan-400/30",
+              )}
             >
-              <CardHeader>
-                <CardDescription>
+              {/* Subtle ambient light */}
+              <div
+                className={cn(
+                  "pointer-events-none absolute -top-12 -right-12 size-28 rounded-full blur-2xl transition-all duration-300",
+                  kpi.danger
+                    ? "bg-rose-500/15"
+                    : "bg-cyan-400/[0.08]",
+                )}
+              />
+
+              <CardHeader className="relative pb-2">
+                <CardDescription className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">
                   {kpi.label}
                 </CardDescription>
 
-                <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+                <CardTitle className="text-2xl font-semibold tabular-nums text-slate-100 font-mono tracking-tight @[250px]/card:text-3xl">
                   {loadingStats &&
                   workspaces.length === 0
                     ? "—"
@@ -717,17 +732,19 @@ export default function DashboardPage() {
                   <Badge
                     variant="outline"
                     className={cn(
-                      kpi.danger &&
-                        "border-red-500/40 text-red-400",
+                      "gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold tracking-wide backdrop-blur-md",
+                      kpi.danger
+                        ? "border-rose-500/35 bg-rose-500/10 text-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.15)]"
+                        : "border-cyan-400/25 bg-cyan-500/10 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.12)]",
                     )}
                   >
-                    <Icon />
+                    <Icon className="size-3.5" />
                     {kpi.badge}
                   </Badge>
                 </CardAction>
               </CardHeader>
 
-              <CardFooter className="text-sm text-muted-foreground">
+              <CardFooter className="relative text-xs text-slate-400">
                 {kpi.note}
               </CardFooter>
             </Card>
@@ -748,8 +765,11 @@ export default function DashboardPage() {
             </CardDescription>
 
             <CardAction>
-              <Badge variant="outline">
-                <TrendingUpIcon />
+              <Badge
+                variant="outline"
+                className="gap-1.5 border-cyan-400/25 bg-cyan-500/10 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.12)]"
+              >
+                <TrendingUpIcon className="size-3.5" />
                 30 day view
               </Badge>
             </CardAction>
@@ -926,7 +946,7 @@ export default function DashboardPage() {
                 config={{
                   hits: {
                     label: "Deposit addresses",
-                    color: "#ef4444",
+                    color: "#f43f5e",
                   },
                 }}
                 className="aspect-auto h-[210px] w-full"
@@ -978,12 +998,12 @@ export default function DashboardPage() {
 
         <Card className="@4xl/main:col-span-2">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertTriangleIcon className="size-4 text-red-400" />
+            <CardTitle className="flex items-center gap-2 text-slate-100">
+              <AlertTriangleIcon className="size-4 text-rose-400" />
               Live alerts
             </CardTitle>
 
-            <CardDescription>
+            <CardDescription className="text-slate-400">
               {openAlerts.length} unacknowledged
             </CardDescription>
 
@@ -993,35 +1013,37 @@ export default function DashboardPage() {
                 className={buttonVariants({
                   variant: "ghost",
                   size: "sm",
+                  className:
+                    "gap-1 border border-cyan-400/20 bg-slate-900/40 text-cyan-300 hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-cyan-200",
                 })}
               >
                 View all
-                <ArrowUpRightIcon />
+                <ArrowUpRightIcon className="size-3.5" />
               </Link>
             </CardAction>
           </CardHeader>
 
-          <CardContent className="flex flex-col divide-y">
+          <CardContent className="flex flex-col divide-y divide-cyan-400/[0.08]">
             {alerts
               .slice(0, 4)
               .map((alert) => (
                 <div
                   key={alert.id}
-                  className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0"
+                  className="flex items-start gap-3 rounded-lg py-2.5 px-2 -mx-2 transition-colors hover:bg-cyan-400/[0.035] first:pt-1 last:pb-1"
                 >
                   <RiskBadge
                     level={alert.level}
                   />
 
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">
+                    <p className="truncate text-sm font-medium text-slate-200">
                       {alert.message}
                     </p>
 
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-slate-500">
                       <Link
                         href={`/workspaces/${alert.workspaceId}`}
-                        className="underline-offset-2 hover:underline"
+                        className="font-mono text-cyan-400/70 underline-offset-2 hover:text-cyan-300 hover:underline"
                       >
                         {alert.workspaceId}
                       </Link>
@@ -1036,6 +1058,7 @@ export default function DashboardPage() {
                     <Button
                       size="xs"
                       variant="outline"
+                      className="border-cyan-400/25 bg-slate-900/60 text-cyan-300 hover:border-cyan-400/45 hover:bg-cyan-500/10 hover:text-cyan-200"
                       onClick={() =>
                         dispatch({
                           type: "ack",
@@ -1047,7 +1070,7 @@ export default function DashboardPage() {
                       Acknowledge
                     </Button>
                   ) : (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="font-mono text-xs text-slate-500">
                       Ack’d
                     </span>
                   )}
@@ -1065,11 +1088,11 @@ export default function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>
+          <CardTitle className="text-slate-100">
             Active workspaces
           </CardTitle>
 
-          <CardDescription>
+          <CardDescription className="text-slate-400">
             Each workspace holds the trace graph,
             alerts, reports and team discussion
             for one complaint
@@ -1081,6 +1104,8 @@ export default function DashboardPage() {
               className={buttonVariants({
                 variant: "outline",
                 size: "sm",
+                className:
+                  "border-cyan-400/20 bg-slate-900/40 text-cyan-300 hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-cyan-200",
               })}
             >
               All workspaces
@@ -1090,29 +1115,29 @@ export default function DashboardPage() {
 
         <CardContent>
           <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>
+            <TableHeader className="border-cyan-400/[0.12]">
+              <TableRow className="border-cyan-400/[0.08] hover:bg-transparent">
+                <TableHead className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                   Case
                 </TableHead>
 
-                <TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                   Risk
                 </TableHead>
 
-                <TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                   Status
                 </TableHead>
 
-                <TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                   Amount
                 </TableHead>
 
-                <TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                   Attribution
                 </TableHead>
 
-                <TableHead>
+                <TableHead className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
                   Team
                 </TableHead>
               </TableRow>
@@ -1128,16 +1153,17 @@ export default function DashboardPage() {
                   ) => (
                     <TableRow
                       key={`${workspace.id}-${workspace.traceId ?? "local"}-${index}`}
+                      className="border-cyan-400/[0.08] transition-colors hover:bg-cyan-500/[0.04]"
                     >
                       <TableCell>
                         <Link
                           href={`/workspaces/${workspace.id}`}
-                          className="font-medium hover:underline"
+                          className="font-mono text-xs font-semibold text-cyan-300 hover:text-cyan-200 hover:underline"
                         >
                           {workspace.id}
                         </Link>
 
-                        <div className="max-w-[260px] truncate text-xs text-muted-foreground">
+                        <div className="max-w-[260px] truncate text-xs text-slate-400 mt-0.5">
                           {workspace.title}
                         </div>
                       </TableCell>
@@ -1161,7 +1187,7 @@ export default function DashboardPage() {
                         />
                       </TableCell>
 
-                      <TableCell className="tabular-nums">
+                      <TableCell className="font-mono text-xs font-medium tabular-nums text-slate-200">
                         {inr(
                           getWorkspaceAmount(
                             workspace,
@@ -1169,12 +1195,12 @@ export default function DashboardPage() {
                         )}
                       </TableCell>
 
-                      <TableCell className="text-xs">
+                      <TableCell className="text-xs text-slate-300">
                         {(
                           workspace.summary
                             ?.vasps ?? []
                         ).join(", ") || (
-                          <span className="text-muted-foreground">
+                          <span className="text-slate-500">
                             Unattributed
                           </span>
                         )}
@@ -1196,7 +1222,7 @@ export default function DashboardPage() {
                 <TableRow>
                   <TableCell
                     colSpan={6}
-                    className="h-24 text-center text-muted-foreground"
+                    className="h-24 text-center text-slate-500"
                   >
                     No active workspaces.
                   </TableCell>

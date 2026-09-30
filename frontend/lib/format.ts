@@ -65,10 +65,12 @@ export const inr = (
 };
 
 export const RISK_STYLE: Record<RiskLevel, string> = {
-  Critical: "bg-red-500/15 text-red-400 border-red-500/30",
-  High: "bg-orange-500/15 text-orange-400 border-orange-500/30",
-  Medium: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30",
-  Low: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  Critical:
+    "bg-rose-500/10 text-rose-300 border-rose-500/30 shadow-[0_0_12px_rgba(244,63,94,0.16)]",
+  High: "bg-amber-500/10 text-amber-300 border-amber-500/30 shadow-[0_0_12px_rgba(245,158,11,0.16)]",
+  Medium:
+    "bg-yellow-500/10 text-yellow-300 border-yellow-500/30 shadow-[0_0_12px_rgba(234,179,8,0.14)]",
+  Low: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-[0_0_12px_rgba(16,185,129,0.14)]",
 };
 
 export const levelFromScore = (

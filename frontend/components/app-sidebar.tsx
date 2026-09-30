@@ -148,8 +148,8 @@ export function AppSidebar(
                 px-2.5
                 transition-all
                 duration-200
-                hover:border-cyan-400/10
-                hover:bg-cyan-400/[0.035]
+                hover:border-cyan-400/20
+                hover:bg-cyan-500/[0.06]
               "
             >
               <div
@@ -165,11 +165,11 @@ export function AppSidebar(
                   bg-gradient-to-br
                   from-amber-300
                   via-yellow-400
-                  to-orange-400
+                  to-orange-500
                   text-lg
-                  shadow-[0_0_22px_rgba(251,191,36,0.16)]
+                  shadow-[0_0_24px_rgba(251,191,36,0.25)]
                   ring-1
-                  ring-white/10
+                  ring-amber-300/40
                 "
               >
                 <span className="relative z-10">🍋</span>
@@ -179,7 +179,7 @@ export function AppSidebar(
                     absolute
                     inset-0
                     bg-gradient-to-br
-                    from-white/25
+                    from-white/30
                     via-transparent
                     to-transparent
                   "
@@ -204,8 +204,8 @@ export function AppSidebar(
                     truncate
                     text-[10px]
                     font-medium
-                    tracking-[0.02em]
-                    text-slate-500
+                    tracking-[0.04em]
+                    text-cyan-400/70
                   "
                 >
                   Crypto Fraud Attribution
@@ -219,8 +219,8 @@ export function AppSidebar(
                   top-2
                   size-1.5
                   rounded-full
-                  bg-cyan-400/70
-                  shadow-[0_0_8px_rgba(34,211,238,0.6)]
+                  bg-cyan-400
+                  shadow-[0_0_8px_rgba(34,211,238,0.8)]
                   opacity-0
                   transition-opacity
                   group-hover:opacity-100
@@ -245,18 +245,18 @@ export function AppSidebar(
                     overflow-hidden
                     rounded-xl
                     border
-                    border-cyan-300/20
+                    border-cyan-300/25
                     bg-gradient-to-r
                     from-cyan-500
                     via-sky-500
-                    to-blue-500
+                    to-blue-600
                     text-white
-                    shadow-[0_0_24px_rgba(14,165,233,0.16)]
+                    shadow-[0_0_24px_rgba(14,165,233,0.22)]
                     transition-all
                     duration-200
-                    hover:border-cyan-200/30
+                    hover:border-cyan-200/40
                     hover:brightness-110
-                    hover:shadow-[0_0_30px_rgba(14,165,233,0.25)]
+                    hover:shadow-[0_0_32px_rgba(14,165,233,0.35)]
                   "
                 >
                   <div
@@ -265,15 +265,15 @@ export function AppSidebar(
                       absolute
                       inset-0
                       bg-gradient-to-r
-                      from-white/10
+                      from-white/15
                       via-transparent
                       to-transparent
                     "
                   />
 
-                  <RadarIcon className="relative size-[17px]" />
+                  <RadarIcon className="relative size-[17px] text-cyan-100" />
 
-                  <span className="relative font-semibold">
+                  <span className="relative font-semibold tracking-tight">
                     New Investigation
                   </span>
                 </SidebarMenuButton>
@@ -295,8 +295,12 @@ export function AppSidebar(
                       text-slate-400
                       transition-all
                       duration-200
-                      hover:bg-cyan-400/[0.055]
-                      hover:text-slate-200
+                      hover:bg-cyan-400/[0.08]
+                      hover:text-cyan-100
+                      data-[active=true]:border-l-2
+                      data-[active=true]:border-cyan-400
+                      data-[active=true]:bg-cyan-500/12
+                      data-[active=true]:text-cyan-200
                     "
                   >
                     <item.icon
@@ -319,12 +323,13 @@ export function AppSidebar(
                           right-2
                           rounded-md
                           border
-                          border-cyan-400/10
-                          bg-cyan-400/[0.055]
+                          border-cyan-400/25
+                          bg-cyan-500/15
                           px-1.5
                           text-[10px]
                           font-semibold
-                          text-slate-400
+                          text-cyan-300
+                          shadow-[0_0_8px_rgba(6,182,212,0.15)]
                         "
                       >
                         {item.badge}
@@ -344,8 +349,8 @@ export function AppSidebar(
               text-[10px]
               font-semibold
               uppercase
-              tracking-[0.12em]
-              text-slate-600
+              tracking-[0.14em]
+              text-cyan-400/60
             "
           >
             Recent workspaces
@@ -381,7 +386,7 @@ export function AppSidebar(
 
                   const workspaceLabel =
                     workspaceTitle
-                      .split("–")[0]
+                       .split("–")[0]
                       .trim() ||
                     workspaceTitle;
 
@@ -407,14 +412,18 @@ export function AppSidebar(
                           text-slate-400
                           transition-all
                           duration-200
-                          hover:bg-cyan-400/[0.045]
-                          hover:text-slate-200
+                          hover:bg-cyan-400/[0.08]
+                          hover:text-cyan-100
+                          data-[active=true]:border-l-2
+                          data-[active=true]:border-cyan-400
+                          data-[active=true]:bg-cyan-500/12
+                          data-[active=true]:text-cyan-200
                         "
                       >
                         <SearchCheckIcon
                           className="
                             size-[16px]
-                            text-slate-500
+                            text-cyan-400/50
                             transition-colors
                             group-hover:text-cyan-300
                           "

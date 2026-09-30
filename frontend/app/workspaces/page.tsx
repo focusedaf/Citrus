@@ -439,40 +439,41 @@ export default function WorkspacesPage() {
                       grid
                       grid-cols-3
                       divide-x
-                      divide-cyan-400/[0.08]
+                      divide-cyan-400/[0.10]
                       overflow-hidden
                       rounded-xl
                       border
-                      border-cyan-400/[0.07]
-                      bg-slate-950/35
+                      border-cyan-400/[0.12]
+                      bg-slate-950/50
+                      shadow-inner
                     "
                   >
                     <div className="px-3 py-2.5">
-                      <div className="text-[9px] uppercase tracking-[0.12em] text-slate-600">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-400/70">
                         Transactions
                       </div>
 
-                      <div className="mt-1 font-mono text-sm text-slate-200">
+                      <div className="mt-1 font-mono text-sm font-semibold text-slate-100">
                         {workspace.summary.transactions}
                       </div>
                     </div>
 
                     <div className="px-3 py-2.5">
-                      <div className="text-[9px] uppercase tracking-[0.12em] text-slate-600">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-400/70">
                         Depth
                       </div>
 
-                      <div className="mt-1 font-mono text-sm text-slate-200">
+                      <div className="mt-1 font-mono text-sm font-semibold text-slate-100">
                         {workspace.summary.depth} hops
                       </div>
                     </div>
 
                     <div className="px-3 py-2.5">
-                      <div className="text-[9px] uppercase tracking-[0.12em] text-slate-600">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-400/70">
                         Value
                       </div>
 
-                      <div className="mt-1 truncate text-sm text-slate-200">
+                      <div className="mt-1 truncate font-mono text-sm font-semibold text-slate-100">
                         {inr(workspace.amountInr)}
                       </div>
                     </div>
@@ -484,8 +485,8 @@ export default function WorkspacesPage() {
                       min-h-9
                       rounded-lg
                       border
-                      border-cyan-400/[0.06]
-                      bg-cyan-400/[0.018]
+                      border-cyan-400/[0.12]
+                      bg-cyan-400/[0.04]
                       px-3
                       py-2.5
                       text-xs
@@ -493,18 +494,18 @@ export default function WorkspacesPage() {
                   >
                     {workspace.summary.vasps.length ? (
                       <>
-                        <span className="text-slate-500">
+                        <span className="text-slate-400">
                           Reached:{" "}
                         </span>
 
-                        <b className="font-medium text-cyan-200/85">
+                        <b className="font-medium text-cyan-200">
                           {workspace.summary.vasps.join(
                             ", ",
                           )}
                         </b>
                       </>
                     ) : (
-                      <span className="text-slate-600">
+                      <span className="text-slate-500">
                         No exchange reached yet
                       </span>
                     )}
@@ -516,8 +517,8 @@ export default function WorkspacesPage() {
                     relative
                     justify-between
                     border-t
-                    border-cyan-400/[0.06]
-                    bg-slate-950/20
+                    border-cyan-400/[0.08]
+                    bg-slate-950/30
                     px-6
                     py-3.5
                   "
