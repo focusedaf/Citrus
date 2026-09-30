@@ -1,31 +1,31 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { useRouter } from "next/navigation"
-import { toast } from "sonner"
-import { CheckCircle2Icon, Loader2Icon, RadarIcon } from "lucide-react"
+import * as React from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { CheckCircle2Icon, Loader2Icon, RadarIcon } from "lucide-react";
 
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/components/ui/select";
 
-import { runTrace } from "@/lib/api"
-import { useStore } from "@/lib/store"
-import { cn } from "@/lib/utils"
+import { runTrace } from "@/lib/api";
+import { useStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
 
 const STEPS = [
   "Ingesting complaint from NCRP",
@@ -33,50 +33,50 @@ const STEPS = [
   "Following hops (BFS)",
   "Tagging addresses against VASP dataset",
   "Scoring risk & generating evidence",
-]
+];
 
 export default function TracePage() {
-  const router = useRouter()
-  const { dispatch } = useStore()
+  const router = useRouter();
+  const { dispatch } = useStore();
 
-  const [address, setAddress] = React.useState("")
-  const [hops, setHops] = React.useState("3")
-  const [step, setStep] = React.useState(-1)
+  const [address, setAddress] = React.useState("");
+  const [hops, setHops] = React.useState("3");
+  const [step, setStep] = React.useState(-1);
 
-  const valid = /^0x[a-fA-F0-9]{40}$/.test(address.trim())
-  const running = step >= 0
+  const valid = /^0x[a-fA-F0-9]{40}$/.test(address.trim());
+  const running = step >= 0;
 
   async function go() {
-    if (!valid || running) return
+    if (!valid || running) return;
 
     const ticker = setInterval(() => {
-      setStep((s) => (s < STEPS.length - 1 ? s + 1 : s))
-    }, 900)
+      setStep((s) => (s < STEPS.length - 1 ? s + 1 : s));
+    }, 900);
 
-    setStep(0)
+    setStep(0);
 
     try {
-      const res = await runTrace(address.trim(), Number(hops))
+      // Ethereum mainnet = chain ID 1.
+      // runTrace expects: address, chainId, maxHops.
+      const res = await runTrace(address.trim(), 1, Number(hops));
 
-      clearInterval(ticker)
-      setStep(STEPS.length)
+      clearInterval(ticker);
+      setStep(STEPS.length);
 
       dispatch({
         type: "addWorkspace",
         ws: res.ws,
         alerts: res.alert ? [res.alert] : [],
-      })
+      });
 
-      toast.success("Live trace complete")
+      toast.success("Live trace complete");
 
-      router.push(`/workspaces/${res.ws.id}`)
+      router.push(`/workspaces/${res.ws.id}`);
     } catch (error) {
-      clearInterval(ticker)
-      setStep(-1)
+      clearInterval(ticker);
+      setStep(-1);
 
-      toast.error(
-        error instanceof Error ? error.message : "Trace failed"
-      )
+      toast.error(error instanceof Error ? error.message : "Trace failed");
     }
   }
 
@@ -91,7 +91,8 @@ export default function TracePage() {
 
           <CardDescription>
             Enter a victim-reported wallet address to trace transactions,
-            identify entities, assess risk, and create an investigation workspace.
+            identify entities, assess risk, and create an investigation
+            workspace.
           </CardDescription>
         </CardHeader>
 
@@ -137,16 +138,8 @@ export default function TracePage() {
             </Select>
           </div>
 
-          <Button
-            onClick={go}
-            disabled={!valid || running}
-            className="w-full"
-          >
-            {running ? (
-              <Loader2Icon className="animate-spin" />
-            ) : (
-              <RadarIcon />
-            )}
+          <Button onClick={go} disabled={!valid || running} className="w-full">
+            {running ? <Loader2Icon className="animate-spin" /> : <RadarIcon />}
 
             {running ? "Tracing..." : "Start trace"}
           </Button>
@@ -161,7 +154,7 @@ export default function TracePage() {
                 key={label}
                 className={cn(
                   "flex items-center gap-2.5 text-sm",
-                  i > step && "text-muted-foreground/50"
+                  i > step && "text-muted-foreground/50",
                 )}
               >
                 {i < step ? (
@@ -179,5 +172,5 @@ export default function TracePage() {
         </Card>
       )}
     </div>
-  )
+  );
 }
