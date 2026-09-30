@@ -1,4 +1,3 @@
-
 "use client";
 
 import * as React from "react";
@@ -53,11 +52,7 @@ import {
 } from "@/components/ui/table";
 import { Button, buttonVariants } from "@/components/ui/button";
 
-import {
-  RiskBadge,
-  StatusBadge,
-  MemberStack,
-} from "@/components/custom/bits";
+import { RiskBadge, StatusBadge, MemberStack } from "@/components/custom/bits";
 
 import { getDashboardStats } from "@/lib/api";
 
@@ -125,6 +120,87 @@ const emptyStats: DashboardStats = {
   top_exchanges: [],
 };
 
+/*
+ * The backend response is runtime data, so we cannot assume
+ * every nested object exists just because the TypeScript type
+ * says it does.
+ *
+ * Normalize it once here so the rest of the dashboard can
+ * safely use stats.entity_counts.vasp, etc.
+ */
+function normalizeDashboardStats(value: unknown): DashboardStats {
+  if (!value || typeof value !== "object") {
+    return emptyStats;
+  }
+
+  const raw = value as Record<string, unknown>;
+
+  const rawEntityCounts =
+    raw.entity_counts && typeof raw.entity_counts === "object"
+      ? (raw.entity_counts as Record<string, unknown>)
+      : {};
+
+  const rawTopExchanges = Array.isArray(raw.top_exchanges)
+    ? raw.top_exchanges
+    : [];
+
+  return {
+    active_cases: typeof raw.active_cases === "number" ? raw.active_cases : 0,
+
+    total_workspaces:
+      typeof raw.total_workspaces === "number" ? raw.total_workspaces : 0,
+
+    critical_cases:
+      typeof raw.critical_cases === "number" ? raw.critical_cases : 0,
+
+    funds_traced_inr:
+      typeof raw.funds_traced_inr === "number" ? raw.funds_traced_inr : 0,
+
+    vasps_identified:
+      typeof raw.vasps_identified === "number" ? raw.vasps_identified : 0,
+
+    open_alerts: typeof raw.open_alerts === "number" ? raw.open_alerts : 0,
+
+    entity_counts: {
+      vasp: typeof rawEntityCounts.vasp === "number" ? rawEntityCounts.vasp : 0,
+
+      mixer:
+        typeof rawEntityCounts.mixer === "number" ? rawEntityCounts.mixer : 0,
+
+      bridge:
+        typeof rawEntityCounts.bridge === "number" ? rawEntityCounts.bridge : 0,
+
+      contract:
+        typeof rawEntityCounts.contract === "number"
+          ? rawEntityCounts.contract
+          : 0,
+
+      unknown:
+        typeof rawEntityCounts.unknown === "number"
+          ? rawEntityCounts.unknown
+          : 0,
+    },
+
+    top_exchanges: rawTopExchanges
+      .filter(
+        (
+          item,
+        ): item is {
+          name: string;
+          hits: number;
+        } =>
+          !!item &&
+          typeof item === "object" &&
+          typeof (item as Record<string, unknown>).name === "string" &&
+          typeof (item as Record<string, unknown>).hits === "number",
+      )
+      .map((item) => ({
+        name: item.name,
+        hits: item.hits,
+      })),
+  };
+}
+
 function normalizeRiskLevel(
   level: string | undefined,
 ): "critical" | "high" | "medium" | "low" {
@@ -138,13 +214,10 @@ function normalizeRiskLevel(
 }
 
 function formatTrendDate(timestamp: number) {
-  return new Date(timestamp * 1000).toLocaleDateString(
-    "en-IN",
-    {
-      day: "numeric",
-      month: "short",
-    },
-  );
+  return new Date(timestamp * 1000).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+  });
 }
 
 export default function DashboardPage() {
@@ -152,14 +225,11 @@ export default function DashboardPage() {
 
   const { workspaces, alerts } = state;
 
-  const [stats, setStats] =
-    React.useState<DashboardStats>(emptyStats);
+  const [stats, setStats] = React.useState<DashboardStats>(emptyStats);
 
-  const [loadingStats, setLoadingStats] =
-    React.useState(true);
+  const [loadingStats, setLoadingStats] = React.useState(true);
 
-  const [statsError, setStatsError] =
-    React.useState<string | null>(null);
+  const [statsError, setStatsError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -169,17 +239,19 @@ export default function DashboardPage() {
         setLoadingStats(true);
         setStatsError(null);
 
-        const data =
-          (await getDashboardStats(30)) as DashboardStats;
+        const data = await getDashboardStats(30);
 
         if (!cancelled) {
-          setStats(data);
+          /*
+           * Never put raw backend JSON directly into
+           * dashboard state.
+           *
+           * Normalize nested fields first.
+           */
+          setStats(normalizeDashboardStats(data));
         }
       } catch (error) {
-        console.error(
-          "Failed to load dashboard statistics:",
-          error,
-        );
+        console.error("Failed to load dashboard statistics:", error);
 
         if (!cancelled) {
           setStatsError(
@@ -187,6 +259,12 @@ export default function DashboardPage() {
               ? error.message
               : "Failed to load dashboard statistics",
           );
+
+          /*
+           * Keep the dashboard renderable even when
+           * the statistics endpoint fails.
+           */
+          setStats(emptyStats);
         }
       } finally {
         if (!cancelled) {
@@ -202,13 +280,9 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const active = workspaces.filter(
-    (w) => w.status !== "Closed",
-  );
+  const active = workspaces.filter((w) => w.status !== "Closed");
 
-  const openAlerts = alerts.filter(
-    (a) => !a.acknowledged,
-  );
+  const openAlerts = alerts.filter((a) => !a.acknowledged);
 
   /*
    * Build the risk trend entirely on the frontend.
@@ -222,18 +296,13 @@ export default function DashboardPage() {
 
     today.setHours(0, 0, 0, 0);
 
-    const days = Array.from(
-      { length: 30 },
-      (_, index) => {
-        const date = new Date(today);
+    const days = Array.from({ length: 30 }, (_, index) => {
+      const date = new Date(today);
 
-        date.setDate(
-          today.getDate() - (29 - index),
-        );
+      date.setDate(today.getDate() - (29 - index));
 
-        return date;
-      },
-    );
+      return date;
+    });
 
     const grouped = new Map<
       string,
@@ -261,9 +330,7 @@ export default function DashboardPage() {
     workspaces.forEach((workspace) => {
       if (!workspace.createdAt) return;
 
-      const date = new Date(
-        workspace.createdAt * 1000,
-      );
+      const date = new Date(workspace.createdAt * 1000);
 
       const key = date.toISOString().slice(0, 10);
 
@@ -271,9 +338,7 @@ export default function DashboardPage() {
 
       if (!day) return;
 
-      const risk = normalizeRiskLevel(
-        workspace.riskLevel,
-      );
+      const risk = normalizeRiskLevel(workspace.riskLevel);
 
       day[risk] += 1;
     });
@@ -389,9 +454,7 @@ export default function DashboardPage() {
               Dashboard statistics could not be loaded.
             </p>
 
-            <p className="mt-1 text-xs text-muted-foreground">
-              {statsError}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{statsError}</p>
           </CardContent>
         </Card>
       )}
@@ -401,14 +464,9 @@ export default function DashboardPage() {
           const Icon = kpi.icon;
 
           return (
-            <Card
-              key={kpi.label}
-              className="@container/card"
-            >
+            <Card key={kpi.label} className="@container/card">
               <CardHeader>
-                <CardDescription>
-                  {kpi.label}
-                </CardDescription>
+                <CardDescription>{kpi.label}</CardDescription>
 
                 <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
                   {loadingStats ? "—" : kpi.value}
@@ -418,8 +476,7 @@ export default function DashboardPage() {
                   <Badge
                     variant="outline"
                     className={cn(
-                      kpi.danger &&
-                        "border-red-500/40 text-red-400",
+                      kpi.danger && "border-red-500/40 text-red-400",
                     )}
                   >
                     <Icon />
@@ -439,13 +496,10 @@ export default function DashboardPage() {
       <div className="grid gap-4 @4xl/main:grid-cols-3">
         <Card className="@4xl/main:col-span-2">
           <CardHeader>
-            <CardTitle>
-              Cases by risk level
-            </CardTitle>
+            <CardTitle>Cases by risk level</CardTitle>
 
             <CardDescription>
-              Workspace cases grouped by risk level over
-              the last 30 days
+              Workspace cases grouped by risk level over the last 30 days
             </CardDescription>
 
             <CardAction>
@@ -470,10 +524,7 @@ export default function DashboardPage() {
                   bottom: 0,
                 }}
               >
-                <CartesianGrid
-                  vertical={false}
-                  strokeDasharray="3 3"
-                />
+                <CartesianGrid vertical={false} strokeDasharray="3 3" />
 
                 <XAxis
                   dataKey="date"
@@ -484,9 +535,7 @@ export default function DashboardPage() {
                   tickFormatter={(value) =>
                     formatTrendDate(
                       Math.floor(
-                        new Date(
-                          `${value}T00:00:00`,
-                        ).getTime() / 1000,
+                        new Date(`${value}T00:00:00`).getTime() / 1000,
                       ),
                     )
                   }
@@ -501,11 +550,7 @@ export default function DashboardPage() {
 
                 <ChartTooltip
                   cursor={false}
-                  content={
-                    <ChartTooltipContent
-                      indicator="dot"
-                    />
-                  }
+                  content={<ChartTooltipContent indicator="dot" />}
                 />
 
                 <Area
@@ -544,11 +589,7 @@ export default function DashboardPage() {
                   stroke="var(--color-critical)"
                 />
 
-                <ChartLegend
-                  content={
-                    <ChartLegendContent />
-                  }
-                />
+                <ChartLegend content={<ChartLegendContent />} />
               </AreaChart>
             </ChartContainer>
           </CardContent>
@@ -556,9 +597,7 @@ export default function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>
-              Where the money lands
-            </CardTitle>
+            <CardTitle>Where the money lands</CardTitle>
 
             <CardDescription>
               Traced addresses by attributed entity
@@ -572,12 +611,7 @@ export default function DashboardPage() {
             >
               <PieChart>
                 <ChartTooltip
-                  content={
-                    <ChartTooltipContent
-                      hideLabel
-                      nameKey="type"
-                    />
-                  }
+                  content={<ChartTooltipContent hideLabel nameKey="type" />}
                 />
 
                 <Pie
@@ -595,13 +629,7 @@ export default function DashboardPage() {
                   ))}
                 </Pie>
 
-                <ChartLegend
-                  content={
-                    <ChartLegendContent
-                      nameKey="type"
-                    />
-                  }
-                />
+                <ChartLegend content={<ChartLegendContent nameKey="type" />} />
               </PieChart>
             </ChartContainer>
           </CardContent>
@@ -611,13 +639,9 @@ export default function DashboardPage() {
       <div className="grid gap-4 @4xl/main:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>
-              Top exchanges hit
-            </CardTitle>
+            <CardTitle>Top exchanges hit</CardTitle>
 
-            <CardDescription>
-              Freeze-request candidates
-            </CardDescription>
+            <CardDescription>Freeze-request candidates</CardDescription>
           </CardHeader>
 
           <CardContent>
@@ -647,25 +671,14 @@ export default function DashboardPage() {
                     tick={{ fontSize: 11 }}
                   />
 
-                  <XAxis
-                    type="number"
-                    hide
-                  />
+                  <XAxis type="number" hide />
 
                   <ChartTooltip
                     cursor={false}
-                    content={
-                      <ChartTooltipContent
-                        hideLabel
-                      />
-                    }
+                    content={<ChartTooltipContent hideLabel />}
                   />
 
-                  <Bar
-                    dataKey="hits"
-                    fill="var(--color-hits)"
-                    radius={4}
-                  />
+                  <Bar dataKey="hits" fill="var(--color-hits)" radius={4} />
                 </BarChart>
               </ChartContainer>
             ) : (
@@ -709,14 +722,10 @@ export default function DashboardPage() {
                 key={alert.id}
                 className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0"
               >
-                <RiskBadge
-                  level={alert.level}
-                />
+                <RiskBadge level={alert.level} />
 
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">
-                    {alert.message}
-                  </p>
+                  <p className="truncate text-sm">{alert.message}</p>
 
                   <p className="text-xs text-muted-foreground">
                     <Link
@@ -746,9 +755,7 @@ export default function DashboardPage() {
                     Acknowledge
                   </Button>
                 ) : (
-                  <span className="text-xs text-muted-foreground">
-                    Ack’d
-                  </span>
+                  <span className="text-xs text-muted-foreground">Ack’d</span>
                 )}
               </div>
             ))}
@@ -764,13 +771,11 @@ export default function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>
-            Active workspaces
-          </CardTitle>
+          <CardTitle>Active workspaces</CardTitle>
 
           <CardDescription>
-            Each workspace holds the trace graph, alerts,
-            reports and team discussion for one complaint
+            Each workspace holds the trace graph, alerts, reports and team
+            discussion for one complaint
           </CardDescription>
 
           <CardAction>
@@ -790,37 +795,23 @@ export default function DashboardPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>
-                  Case
-                </TableHead>
+                <TableHead>Case</TableHead>
 
-                <TableHead>
-                  Risk
-                </TableHead>
+                <TableHead>Risk</TableHead>
 
-                <TableHead>
-                  Status
-                </TableHead>
+                <TableHead>Status</TableHead>
 
-                <TableHead>
-                  Amount
-                </TableHead>
+                <TableHead>Amount</TableHead>
 
-                <TableHead>
-                  Attribution
-                </TableHead>
+                <TableHead>Attribution</TableHead>
 
-                <TableHead>
-                  Team
-                </TableHead>
+                <TableHead>Team</TableHead>
               </TableRow>
             </TableHeader>
 
             <TableBody>
               {active.slice(0, 5).map((workspace) => (
-                <TableRow
-                  key={workspace.id}
-                >
+                <TableRow key={workspace.id}>
                   <TableCell>
                     <Link
                       href={`/workspaces/${workspace.id}`}
@@ -842,9 +833,7 @@ export default function DashboardPage() {
                   </TableCell>
 
                   <TableCell>
-                    <StatusBadge
-                      status={workspace.status}
-                    />
+                    <StatusBadge status={workspace.status} />
                   </TableCell>
 
                   <TableCell className="tabular-nums">
@@ -852,9 +841,7 @@ export default function DashboardPage() {
                   </TableCell>
 
                   <TableCell className="text-xs">
-                    {workspace.summary.vasps.join(
-                      ", ",
-                    ) || (
+                    {(workspace.summary?.vasps ?? []).join(", ") || (
                       <span className="text-muted-foreground">
                         Unattributed
                       </span>
@@ -862,9 +849,7 @@ export default function DashboardPage() {
                   </TableCell>
 
                   <TableCell>
-                    <MemberStack
-                      ids={workspace.members}
-                    />
+                    <MemberStack ids={workspace.members ?? []} />
                   </TableCell>
                 </TableRow>
               ))}
