@@ -1,6 +1,7 @@
 import json
 import math
 from collections import Counter
+from datetime import datetime, timezone
 
 import networkx as nx
 from pyvis.network import Network
@@ -16,6 +17,21 @@ LEGEND_HTML = """
   </div>
 
   <div class="legend-item">
+    <span class="legend-dot hot"></span>
+    <span>Hot-wallet-like</span>
+  </div>
+
+  <div class="legend-item">
+    <span class="legend-dot cold"></span>
+    <span>Cold-wallet-like</span>
+  </div>
+
+  <div class="legend-item">
+    <span class="legend-dot intermediary"></span>
+    <span>Intermediary wallet</span>
+  </div>
+
+  <div class="legend-item">
     <span class="legend-dot wallet"></span>
     <span>Wallet</span>
   </div>
@@ -28,6 +44,11 @@ LEGEND_HTML = """
   <div class="legend-item">
     <span class="legend-dot bridge"></span>
     <span>Known Bridge</span>
+  </div>
+
+  <div class="legend-item">
+    <span class="legend-dot mixer"></span>
+    <span>Mixer</span>
   </div>
 
   <div class="legend-item">
@@ -75,9 +96,8 @@ def _normalized_amount(edge_data):
     """
     Convert blockchain base-unit values into human-readable amounts.
 
-    Examples:
-      26000000000000000000 with 18 decimals -> 26
-      1000000 with 6 decimals -> 1
+    If `amount` exists without `value`, it is assumed to already be
+    human-readable.
     """
     value = _safe_float(
         edge_data.get("value")
@@ -85,8 +105,10 @@ def _normalized_amount(edge_data):
         else edge_data.get("amount")
     )
 
-    # Some normalized edges may already provide a human-readable amount.
-    if edge_data.get("amount") is not None and edge_data.get("value") is None:
+    if (
+        edge_data.get("amount") is not None
+        and edge_data.get("value") is None
+    ):
         return _safe_float(edge_data.get("amount"))
 
     decimals = edge_data.get("value_decimals", 18)
@@ -106,6 +128,7 @@ def _asset_symbol(edge_data):
     return (
         edge_data.get("token_symbol")
         or edge_data.get("symbol")
+        or edge_data.get("asset")
         or edge_data.get("token")
         or "UNKNOWN"
     )
@@ -129,17 +152,32 @@ def _tag_for_node(node, tags):
     return tags.get(node) or tags.get(node.lower())
 
 
+def _tag_name(tag):
+    if isinstance(tag, dict):
+        return (
+            tag.get("name")
+            or tag.get("label")
+            or tag.get("tag")
+        )
+
+    if tag:
+        return str(tag)
+
+    return None
+
+
 def _entity_type(node, node_data, tags=None, start_address=None):
     """
-    Resolve the entity classification from the strongest available source.
+    Determine the broad entity class.
 
     Priority:
-      1. Explicit reported start address
+      1. Explicit reported address
       2. Tagging result
       3. Node metadata
       4. Unknown
 
-    This prevents contracts from accidentally being classified as wallets.
+    Wallet behavioral classification is handled separately by
+    `_wallet_behavior`.
     """
     node = str(node).lower()
 
@@ -167,16 +205,11 @@ def _entity_type(node, node_data, tags=None, start_address=None):
             if entity_type == "mixer":
                 return "mixer"
 
-            if entity_type == "contract":
+            if entity_type in {"contract", "token"}:
                 return "contract"
 
-            if entity_type == "token":
-                return "contract"
-
-            if entity_type == "wallet":
+            if entity_type in {"wallet", "address", "user"}:
                 return "wallet"
-
-            return entity_type
 
     node_type = _node_type(node_data)
 
@@ -212,12 +245,40 @@ def _entity_label(entity_type):
         "unknown": "Unknown Entity",
     }
 
-    return labels.get(entity_type, entity_type.replace("_", " ").title())
+    return labels.get(
+        entity_type,
+        entity_type.replace("_", " ").title(),
+    )
 
 
-def _node_color(node_data, is_start=False, entity_type=None):
+def _wallet_behavior_label(behavior):
+    labels = {
+        "suspect_wallet": "Suspect wallet",
+        "hot_wallet": "Hot-wallet-like",
+        "cold_wallet": "Cold-wallet-like",
+        "intermediary": "Intermediary wallet",
+        "wallet": "Wallet",
+        "unknown": "Wallet - insufficient evidence",
+    }
+
+    return labels.get(
+        behavior,
+        str(behavior).replace("_", " ").title(),
+    )
+
+
+def _node_color(node_data, is_start=False, entity_type=None, behavior=None):
     if is_start:
         return "#ef4444"
+
+    if behavior == "hot_wallet":
+        return "#f97316"
+
+    if behavior == "cold_wallet":
+        return "#0ea5e9"
+
+    if behavior == "intermediary":
+        return "#eab308"
 
     entity_type = entity_type or _node_type(node_data)
 
@@ -239,9 +300,18 @@ def _node_color(node_data, is_start=False, entity_type=None):
     return "#94a3b8"
 
 
-def _node_shape(node_data, is_start=False, entity_type=None):
+def _node_shape(node_data, is_start=False, entity_type=None, behavior=None):
     if is_start:
         return "star"
+
+    if behavior == "intermediary":
+        return "diamond"
+
+    if behavior == "cold_wallet":
+        return "square"
+
+    if behavior == "hot_wallet":
+        return "dot"
 
     entity_type = entity_type or _node_type(node_data)
 
@@ -281,40 +351,321 @@ def _short_number(value):
     return f"{number:.8f}".rstrip("0").rstrip(".")
 
 
-def _edge_label(edge_data):
-    edge_type = (
+def _edge_type(edge_data):
+    return str(
         edge_data.get("type")
         or edge_data.get("tx_type")
         or edge_data.get("category")
-        or ""
-    )
+        or "transfer"
+    ).lower()
 
-    token_symbol = _asset_symbol(edge_data)
+
+def _is_contract_interaction(edge_data):
+    edge_type = _edge_type(edge_data)
+
+    return edge_type in {
+        "contract_interaction",
+        "contract_call",
+        "contract",
+        "interaction",
+        "call",
+    }
+
+
+def _is_value_transfer(edge_data):
+    """
+    Decide whether an edge represents a meaningful value movement.
+
+    We intentionally keep contract interactions in the graph, but they
+    are rendered as secondary/dashed edges rather than being mistaken
+    for fund-flow hops.
+    """
+    if _is_contract_interaction(edge_data):
+        return False
 
     amount = _normalized_amount(edge_data)
 
-    if token_symbol != "UNKNOWN":
-        if amount:
-            return f"{_short_number(amount)} {token_symbol}"
+    edge_type = _edge_type(edge_data)
 
-        return str(token_symbol)
+    if amount > 0:
+        return True
 
-    if edge_type:
-        return str(edge_type).replace("_", " ").title()
+    return edge_type in {
+        "eth_transfer",
+        "erc20_transfer",
+        "internal",
+        "internal_transfer",
+        "token_transfer",
+        "transfer",
+        "native_transfer",
+    }
 
-    return ""
+
+def _timestamp_value(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        number = float(value)
+
+        if number > 10_000_000_000:
+            return number / 1000.0
+
+        return number
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    try:
+        number = float(text)
+
+        if number > 10_000_000_000:
+            return number / 1000.0
+
+        return number
+
+    except ValueError:
+        pass
+
+    try:
+        normalized = text.replace("Z", "+00:00")
+
+        dt = datetime.fromisoformat(normalized)
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        return dt.timestamp()
+
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _wallet_behavior(node, G, entity_type):
+    """
+    Infer wallet behaviour from observable transaction activity.
+
+    This is intentionally conservative.
+
+    We do NOT claim to know physical key storage. The labels mean:
+      - hot_wallet: highly active wallet behaviour
+      - cold_wallet: storage-like / low outgoing activity
+      - intermediary: receives and forwards funds
+      - wallet: insufficient evidence for a stronger classification
+    """
+    if entity_type not in {"wallet", "reported_wallet"}:
+        return None, []
+
+    incoming_edges = list(G.in_edges(node, data=True))
+    outgoing_edges = list(G.out_edges(node, data=True))
+
+    incoming_value_edges = [
+        item for item in incoming_edges
+        if _is_value_transfer(item[2])
+    ]
+
+    outgoing_value_edges = [
+        item for item in outgoing_edges
+        if _is_value_transfer(item[2])
+    ]
+
+    incoming_count = sum(
+        int(_safe_float(data.get("count"), 1))
+        for _, _, data in incoming_value_edges
+    )
+
+    outgoing_count = sum(
+        int(_safe_float(data.get("count"), 1))
+        for _, _, data in outgoing_value_edges
+    )
+
+    total_count = incoming_count + outgoing_count
+
+    unique_counterparties = set()
+
+    for source, _, _ in incoming_value_edges:
+        unique_counterparties.add(source)
+
+    for _, target, _ in outgoing_value_edges:
+        unique_counterparties.add(target)
+
+    incoming_assets = set()
+    outgoing_assets = set()
+
+    for _, _, data in incoming_value_edges:
+        incoming_assets.add(_asset_symbol(data))
+
+    for _, _, data in outgoing_value_edges:
+        outgoing_assets.add(_asset_symbol(data))
+
+    reasons = []
+
+    # Suspect address is dealt with separately.
+    if total_count == 0:
+        return "unknown", [
+            "No value-transfer activity available for behavioral classification."
+        ]
+
+    # Intermediary behaviour:
+    # receives funds AND forwards funds.
+    if incoming_count > 0 and outgoing_count > 0:
+        forwarding_ratio = min(
+            incoming_count,
+            outgoing_count,
+        ) / max(
+            incoming_count,
+            outgoing_count,
+        )
+
+        if (
+            forwarding_ratio >= 0.25
+            and len(unique_counterparties) >= 2
+        ):
+            reasons.append(
+                "Receives and subsequently forwards value."
+            )
+
+            if outgoing_count >= 3:
+                reasons.append(
+                    f"{outgoing_count} outgoing value-transfer events observed."
+                )
+
+            return "intermediary", reasons
+
+    # Activity-based hot-wallet inference.
+    if outgoing_count >= 5 or total_count >= 10:
+        reasons.append(
+            f"High observed transaction activity ({total_count} value-transfer events)."
+        )
+
+        if outgoing_count >= 3:
+            reasons.append(
+                f"Frequent outgoing activity ({outgoing_count} outgoing events)."
+            )
+
+        if len(unique_counterparties) >= 4:
+            reasons.append(
+                f"Activity spans {len(unique_counterparties)} counterparties."
+            )
+
+        return "hot_wallet", reasons
+
+    # Storage-like / cold-wallet inference.
+    #
+    # We require incoming activity but little/no outgoing activity.
+    # This prevents an arbitrary low-activity wallet from being called cold.
+    if incoming_count >= 1 and outgoing_count == 0:
+        reasons.append(
+            "Observed incoming value with no outgoing value-transfer activity in the traced data."
+        )
+        reasons.append(
+            "Behaviour is storage-like based on the available trace."
+        )
+
+        return "cold_wallet", reasons
+
+    if incoming_count >= 2 and outgoing_count <= 1:
+        reasons.append(
+            "Predominantly incoming value-transfer activity."
+        )
+        reasons.append(
+            "Limited outgoing activity in the traced data."
+        )
+
+        return "cold_wallet", reasons
+
+    return "wallet", [
+        "Wallet activity detected, but available evidence is insufficient "
+        "for a stronger behavioral classification."
+    ]
+
+
+def classify_wallets(
+    G,
+    tags=None,
+    start_address=None,
+):
+    """
+    Return behavioral classifications for wallet-like nodes.
+
+    This is useful to both the graph and the PDF so both outputs use
+    the same classification source.
+    """
+    results = {}
+
+    start_address = (
+        str(start_address).lower()
+        if start_address
+        else None
+    )
+
+    for node, data in G.nodes(data=True):
+        entity_type = _entity_type(
+            node,
+            data,
+            tags=tags,
+            start_address=start_address,
+        )
+
+        if entity_type not in {"wallet", "reported_wallet"}:
+            continue
+
+        if start_address and node == start_address:
+            behavior = "suspect_wallet"
+            reasons = [
+                "Address was supplied as the reported suspect wallet."
+            ]
+        else:
+            behavior, reasons = _wallet_behavior(
+                node,
+                G,
+                entity_type,
+            )
+
+        incoming_count = 0
+        outgoing_count = 0
+
+        for _, _, edge_data in G.in_edges(node, data=True):
+            if _is_value_transfer(edge_data):
+                incoming_count += int(
+                    _safe_float(edge_data.get("count"), 1)
+                )
+
+        for _, _, edge_data in G.out_edges(node, data=True):
+            if _is_value_transfer(edge_data):
+                outgoing_count += int(
+                    _safe_float(edge_data.get("count"), 1)
+                )
+
+        results[node] = {
+            "address": node,
+            "behavior": behavior,
+            "label": _wallet_behavior_label(behavior),
+            "confidence": (
+                1.0
+                if behavior == "suspect_wallet"
+                else 0.8
+                if behavior in {"intermediary", "hot_wallet", "cold_wallet"}
+                else 0.4
+            ),
+            "incoming_transactions": incoming_count,
+            "outgoing_transactions": outgoing_count,
+            "reasons": reasons,
+        }
+
+    return results
 
 
 def _aggregate_asset_totals(G):
-    """
-    Return totals grouped by asset.
-
-    This avoids incorrectly adding ETH, USDT, NFSC, etc.
-    into one meaningless numeric total.
-    """
     asset_totals = {}
 
     for _, _, data in G.edges(data=True):
+        # Contract interactions generally do not represent transferred value.
+        if not _is_value_transfer(data):
+            continue
+
         asset = _asset_symbol(data)
         amount = _normalized_amount(data)
 
@@ -332,6 +683,9 @@ def _compute_stats(G):
     node_types = Counter()
     edge_count = 0
     transaction_count = 0
+    value_edge_count = 0
+    interaction_edge_count = 0
+
     asset_totals = _aggregate_asset_totals(G)
 
     for node, data in G.nodes(data=True):
@@ -340,13 +694,22 @@ def _compute_stats(G):
     for _, _, data in G.edges(data=True):
         edge_count += 1
 
-        transaction_count += int(
+        count = int(
             _safe_float(data.get("count"), 1)
         )
+
+        transaction_count += count
+
+        if _is_value_transfer(data):
+            value_edge_count += 1
+        else:
+            interaction_edge_count += 1
 
     return {
         "nodes": G.number_of_nodes(),
         "edges": edge_count,
+        "value_edges": value_edge_count,
+        "interaction_edges": interaction_edge_count,
         "transaction_count": transaction_count,
         "asset_totals": asset_totals,
         "node_types": dict(node_types),
@@ -380,7 +743,7 @@ def _controls_and_style_html(stats):
     font-family: Arial, sans-serif;
     font-size: 13px;
     box-shadow: 0 4px 20px rgba(0,0,0,.25);
-    min-width: 200px;
+    min-width: 210px;
 }}
 
 .legend-title {{
@@ -407,6 +770,18 @@ def _controls_and_style_html(stats):
     background: #ef4444;
 }}
 
+.legend-dot.hot {{
+    background: #f97316;
+}}
+
+.legend-dot.cold {{
+    background: #0ea5e9;
+}}
+
+.legend-dot.intermediary {{
+    background: #eab308;
+}}
+
 .legend-dot.wallet {{
     background: #64748b;
 }}
@@ -417,6 +792,10 @@ def _controls_and_style_html(stats):
 
 .legend-dot.bridge {{
     background: #a855f7;
+}}
+
+.legend-dot.mixer {{
+    background: #dc2626;
 }}
 
 .legend-dot.contract {{
@@ -444,16 +823,27 @@ def _controls_and_style_html(stats):
 #citrus-stats strong {{
     font-size: 14px;
 }}
+
+.citrus-note {{
+    margin-top: 8px;
+    opacity: .75;
+    font-size: 10px;
+}}
 </style>
 
 <div id="citrus-stats">
     <strong>CITRUS Graph</strong><br>
     Nodes: {stats["nodes"]}<br>
     Connections: {stats["edges"]}<br>
+    Value flows: {stats["value_edges"]}<br>
+    Contract interactions: {stats["interaction_edges"]}<br>
     Transactions: {stats["transaction_count"]}<br>
     <br>
-    <strong>Asset totals</strong><br>
+    <strong>Transferred assets</strong><br>
     {asset_lines}
+    <div class="citrus-note">
+        Contract interactions are shown as secondary links.
+    </div>
 </div>
 
 <script>
@@ -471,7 +861,81 @@ def _inject_overlays(html, stats):
     return html + overlay
 
 
+def _merge_edge_data(existing, edge_data):
+    current_amount = _normalized_amount(edge_data)
+
+    existing["aggregated_amount"] = (
+        _safe_float(existing.get("aggregated_amount"))
+        + current_amount
+    )
+
+    existing["count"] = (
+        int(_safe_float(existing.get("count"), 1)) + 1
+    )
+
+    current_type = _edge_type(edge_data)
+
+    existing_types = existing.get("types", [])
+
+    if not isinstance(existing_types, list):
+        existing_types = [str(existing_types)]
+
+    if current_type not in existing_types:
+        existing_types.append(current_type)
+
+    existing["types"] = existing_types
+
+    asset = _asset_symbol(edge_data)
+
+    existing_assets = existing.get("assets", [])
+
+    if not isinstance(existing_assets, list):
+        existing_assets = [str(existing_assets)]
+
+    if asset not in existing_assets:
+        existing_assets.append(asset)
+
+    existing["assets"] = existing_assets
+
+    tx_hash = (
+        edge_data.get("tx_hash")
+        or edge_data.get("hash")
+    )
+
+    existing_hashes = existing.get("tx_hashes", [])
+
+    if not isinstance(existing_hashes, list):
+        existing_hashes = [existing_hashes]
+
+    if tx_hash and tx_hash not in existing_hashes:
+        existing_hashes.append(tx_hash)
+
+    existing["tx_hashes"] = existing_hashes
+
+    if not existing.get("tx_hash") and tx_hash:
+        existing["tx_hash"] = tx_hash
+
+    if existing.get("token_symbol") is None:
+        existing["token_symbol"] = edge_data.get("token_symbol")
+
+    if existing.get("symbol") is None:
+        existing["symbol"] = edge_data.get("symbol")
+
+    if existing.get("asset") is None:
+        existing["asset"] = edge_data.get("asset")
+
+    return existing
+
+
 def build_graph(edges, start_address=None):
+    """
+    Build a graph while preserving both:
+      - value-transfer edges
+      - contract-interaction edges
+
+    They are kept separate using `is_value_transfer` so rendering can
+    visually prioritize actual fund flow.
+    """
     G = nx.DiGraph()
 
     if not edges:
@@ -519,94 +983,39 @@ def build_graph(edges, start_address=None):
 
         edge_data = dict(edge)
 
+        edge_data["is_value_transfer"] = _is_value_transfer(
+            edge_data
+        )
+
+        edge_data["is_contract_interaction"] = (
+            not edge_data["is_value_transfer"]
+        )
+
         if G.has_edge(source, target):
-            existing = G[source][target]
-
-            existing_amount = _normalized_amount(existing)
-            current_amount = _normalized_amount(edge_data)
-
-            # Preserve aggregation in human-readable units.
-            existing["aggregated_amount"] = (
-                _safe_float(existing.get("aggregated_amount"))
-                + current_amount
+            _merge_edge_data(
+                G[source][target],
+                edge_data,
             )
-
-            existing["count"] = (
-                int(_safe_float(existing.get("count"), 1)) + 1
-            )
-
-            existing_types = existing.get("types", [])
-
-            if not isinstance(existing_types, list):
-                existing_types = [str(existing_types)]
-
-            current_type = (
-                edge_data.get("type")
-                or edge_data.get("tx_type")
-                or "transfer"
-            )
-
-            if current_type not in existing_types:
-                existing_types.append(current_type)
-
-            existing["types"] = existing_types
-
-            existing_assets = existing.get("assets", [])
-
-            if not isinstance(existing_assets, list):
-                existing_assets = [str(existing_assets)]
-
-            asset = _asset_symbol(edge_data)
-
-            if asset not in existing_assets:
-                existing_assets.append(asset)
-
-            existing["assets"] = existing_assets
-
-            existing_hashes = existing.get("tx_hashes", [])
-
-            if not isinstance(existing_hashes, list):
-                existing_hashes = [existing_hashes]
-
-            tx_hash = edge_data.get("tx_hash")
-
-            if tx_hash and tx_hash not in existing_hashes:
-                existing_hashes.append(tx_hash)
-
-            existing["tx_hashes"] = existing_hashes
-
-            if not existing.get("tx_hash"):
-                existing["tx_hash"] = tx_hash
-
-            # Keep the original value for evidence compatibility,
-            # but use aggregated_amount for graph display/statistics.
-            existing["value"] = existing.get("value", 0)
-
-            if existing.get("token_symbol") is None:
-                existing["token_symbol"] = edge_data.get(
-                    "token_symbol"
-                )
-
-            if existing.get("symbol") is None:
-                existing["symbol"] = edge_data.get("symbol")
 
         else:
             edge_data["count"] = 1
-            edge_data["aggregated_amount"] = _normalized_amount(
-                edge_data
+
+            edge_data["aggregated_amount"] = (
+                _normalized_amount(edge_data)
             )
 
             edge_data["types"] = [
-                edge_data.get("type")
-                or edge_data.get("tx_type")
-                or "transfer"
+                _edge_type(edge_data)
             ]
 
             edge_data["assets"] = [
                 _asset_symbol(edge_data)
             ]
 
-            tx_hash = edge_data.get("tx_hash")
+            tx_hash = (
+                edge_data.get("tx_hash")
+                or edge_data.get("hash")
+            )
 
             edge_data["tx_hashes"] = (
                 [tx_hash] if tx_hash else []
@@ -653,12 +1062,13 @@ def render_graph(G, tags=None, start_address=None):
               "iterations": 1000
             },
             "barnesHut": {
-              "gravitationalConstant": -8000,
-              "centralGravity": 0.25,
-              "springLength": 180,
-              "springConstant": 0.04,
+              "gravitationalConstant": -9000,
+              "centralGravity": 0.35,
+              "springLength": 210,
+              "springConstant": 0.035,
               "damping": 0.9
-            }
+            },
+            "minVelocity": 0.75
           },
           "nodes": {
             "font": {
@@ -694,6 +1104,12 @@ def render_graph(G, tags=None, start_address=None):
         else None
     )
 
+    wallet_behaviors = classify_wallets(
+        G,
+        tags=tags,
+        start_address=start_address,
+    )
+
     for node, data in G.nodes(data=True):
         is_start = (
             bool(data.get("is_start"))
@@ -707,35 +1123,68 @@ def render_graph(G, tags=None, start_address=None):
             start_address=start_address,
         )
 
+        wallet_info = wallet_behaviors.get(node)
+
+        behavior = (
+            wallet_info.get("behavior")
+            if wallet_info
+            else None
+        )
+
         label = data.get("label") or _short_address(node)
 
-        title = (
-            f"<b>{label}</b><br>"
-            f"Address: {node}<br>"
-            f"Entity: {_entity_label(entity_type)}"
-        )
+        title_parts = [
+            f"<b>{label}</b>",
+            f"Address: {node}",
+            f"Entity: {_entity_label(entity_type)}",
+        ]
+
+        if wallet_info:
+            title_parts.append(
+                f"Behavior: {_wallet_behavior_label(behavior)}"
+            )
+
+            if wallet_info.get("confidence") is not None:
+                title_parts.append(
+                    f"Classification confidence: "
+                    f"{wallet_info['confidence']:.0%}"
+                )
+
+            for reason in wallet_info.get("reasons", []):
+                title_parts.append(
+                    f"Reason: {reason}"
+                )
 
         tag = _tag_for_node(node, tags)
 
-        if isinstance(tag, dict):
-            tag_name = (
-                tag.get("name")
-                or tag.get("label")
-                or tag.get("tag")
+        tag_name = _tag_name(tag)
+
+        if tag_name:
+            title_parts.append(
+                f"Tag: {tag_name}"
             )
 
+            label = f"{label}\\n{tag_name}"
+
+        if isinstance(tag, dict):
             confidence = tag.get("confidence")
 
-            if tag_name:
-                title += f"<br>Tag: {tag_name}"
-                label = f"{label}\\n{tag_name}"
+            if confidence is not None:
+                title_parts.append(
+                    f"Tag confidence: {confidence}"
+                )
 
-            if confidence:
-                title += f"<br>Confidence: {confidence}"
+        if wallet_info and behavior not in {
+            None,
+            "wallet",
+            "unknown",
+        }:
+            label = (
+                f"{label}\\n"
+                f"{_wallet_behavior_label(behavior)}"
+            )
 
-        elif tag:
-            label = f"{label}\\n{tag}"
-            title += f"<br>Tag: {tag}"
+        title = "<br>".join(title_parts)
 
         net.add_node(
             node,
@@ -745,13 +1194,22 @@ def render_graph(G, tags=None, start_address=None):
                 data,
                 is_start=is_start,
                 entity_type=entity_type,
+                behavior=behavior,
             ),
             shape=_node_shape(
                 data,
                 is_start=is_start,
                 entity_type=entity_type,
+                behavior=behavior,
             ),
-            size=28 if is_start else 20,
+            size=32 if is_start else (
+                25 if behavior in {
+                    "hot_wallet",
+                    "cold_wallet",
+                    "intermediary",
+                }
+                else 20
+            ),
         )
 
     for source, target, data in G.edges(data=True):
@@ -766,45 +1224,59 @@ def render_graph(G, tags=None, start_address=None):
         if not isinstance(assets, list):
             assets = [str(assets)]
 
-        if len(assets) == 1:
-            asset_text = assets[0]
-        else:
-            asset_text = ", ".join(str(x) for x in assets)
+        asset_text = ", ".join(
+            str(x)
+            for x in assets
+            if str(x) != "UNKNOWN"
+        )
 
         count = int(
             _safe_float(data.get("count"), 1)
         )
 
-        label = ""
+        is_value = data.get(
+            "is_value_transfer",
+            _is_value_transfer(data),
+        )
 
-        if amount:
+        edge_type = _edge_type(data)
+
+        if amount and asset_text:
             label = f"{_short_number(amount)} {asset_text}"
-
-        elif asset_text and asset_text != "UNKNOWN":
+        elif asset_text:
             label = asset_text
+        elif edge_type:
+            label = edge_type.replace(
+                "_",
+                " ",
+            ).title()
+        else:
+            label = ""
 
-        elif data.get("type"):
-            label = str(
-                data["type"]
-            ).replace("_", " ").title()
+        title_parts = [
+            (
+                "Fund transfer"
+                if is_value
+                else "Contract interaction"
+            ),
+        ]
 
-        title_parts = []
-
-        if data.get("type"):
-            title_parts.append(
-                f"Type: {str(data['type']).replace('_', ' ').title()}"
-            )
+        title_parts.append(
+            f"Type: {edge_type.replace('_', ' ').title()}"
+        )
 
         if amount:
             title_parts.append(
-                f"Aggregated value: {_short_number(amount)} {asset_text}"
+                f"Aggregated value: "
+                f"{_short_number(amount)}"
+                + (f" {asset_text}" if asset_text else "")
             )
 
         title_parts.append(
             f"Transactions: {count}"
         )
 
-        if assets:
+        if asset_text:
             title_parts.append(
                 f"Assets: {asset_text}"
             )
@@ -821,29 +1293,50 @@ def render_graph(G, tags=None, start_address=None):
                     f"Tx hashes: {len(tx_hashes)}"
                 )
 
-        title = "<br>".join(title_parts)
-
-        width = max(
-            1.5,
-            min(
-                8.0,
-                1.5 + math.log10(amount + 1) * 1.5,
-            ),
+        width = (
+            max(
+                2.5,
+                min(
+                    10.0,
+                    2.5 + math.log10(amount + 1) * 1.8,
+                ),
+            )
+            if is_value
+            else 1.0
         )
+
+        edge_kwargs = {
+            "label": label,
+            "title": "<br>".join(title_parts),
+            "width": width,
+        }
+
+        if not is_value:
+            edge_kwargs.update(
+                {
+                    "dashes": True,
+                    "color": "#cbd5e1",
+                    "font": {
+                        "size": 9,
+                        "color": "#94a3b8",
+                    },
+                }
+            )
 
         net.add_edge(
             source,
             target,
-            label=label,
-            title=title,
-            width=width,
+            **edge_kwargs,
         )
 
     stats = _compute_stats(G)
 
     html = net.generate_html(notebook=False)
 
-    html = _inject_overlays(html, stats)
+    html = _inject_overlays(
+        html,
+        stats,
+    )
 
     return html.encode("utf-8")
 
@@ -854,6 +1347,12 @@ def investigation_table(
     start_address=None,
 ):
     rows = []
+
+    wallet_behaviors = classify_wallets(
+        G,
+        tags=tags,
+        start_address=start_address,
+    )
 
     for node, data in G.nodes(data=True):
         entity_type = _entity_type(
@@ -881,11 +1380,33 @@ def investigation_table(
 
             confidence = tag.get("confidence")
 
+        wallet_info = wallet_behaviors.get(node)
+
         rows.append(
             {
                 "address": node,
                 "label": label,
                 "type": entity_type,
+                "behavior": (
+                    wallet_info.get("behavior")
+                    if wallet_info
+                    else None
+                ),
+                "behavior_label": (
+                    wallet_info.get("label")
+                    if wallet_info
+                    else None
+                ),
+                "behavior_confidence": (
+                    wallet_info.get("confidence")
+                    if wallet_info
+                    else None
+                ),
+                "behavior_reasons": (
+                    wallet_info.get("reasons", [])
+                    if wallet_info
+                    else []
+                ),
                 "in_degree": G.in_degree(node),
                 "out_degree": G.out_degree(node),
                 "degree": G.degree(node),
@@ -905,6 +1426,63 @@ def investigation_table(
     return rows
 
 
+def _build_flow_paths(G, start_address, max_paths=10):
+    """
+    Build a compact set of meaningful value-flow paths.
+
+    Contract interactions are excluded from these paths because they
+    are not necessarily money movement.
+    """
+    if not start_address:
+        return []
+
+    start_address = str(start_address).lower()
+
+    if start_address not in G:
+        return []
+
+    flow_graph = nx.DiGraph()
+
+    for source, target, data in G.edges(data=True):
+        if _is_value_transfer(data):
+            flow_graph.add_edge(
+                source,
+                target,
+            )
+
+    if start_address not in flow_graph:
+        return []
+
+    paths = []
+
+    try:
+        reachable = nx.single_source_shortest_path(
+            flow_graph,
+            start_address,
+            cutoff=6,
+        )
+    except nx.NetworkXError:
+        return []
+
+    for target, path in reachable.items():
+        if target == start_address:
+            continue
+
+        if len(path) < 2:
+            continue
+
+        paths.append(path)
+
+    paths.sort(
+        key=lambda path: (
+            len(path),
+            path[-1],
+        )
+    )
+
+    return paths[:max_paths]
+
+
 def investigation_summary(
     G,
     address=None,
@@ -916,6 +1494,7 @@ def investigation_summary(
     if G.number_of_nodes() == 0:
         return {
             "address": address,
+            "reported_address": address,
             "chain_id": chain_id,
             "nodes": 0,
             "edges": 0,
@@ -928,7 +1507,9 @@ def investigation_summary(
             "unknown_entities": 0,
             "assets_observed": [],
             "asset_totals": {},
-            "total_value": 0.0,
+            "total_value": {},
+            "wallet_classifications": [],
+            "flow_paths": [],
             "risk": risk or {},
             "cross_chain": cross_chain or {},
         }
@@ -971,16 +1552,52 @@ def investigation_summary(
             unknown_entities += 1
 
     for _, _, data in G.edges(data=True):
+        if not _is_value_transfer(data):
+            continue
+
         asset = _asset_symbol(data)
 
         if asset and asset != "UNKNOWN":
             assets_observed.add(asset)
 
+    wallet_classifications = classify_wallets(
+        G,
+        tags=tags,
+        start_address=address,
+    )
+
+    wallet_classification_list = list(
+        wallet_classifications.values()
+    )
+
+    behavior_counts = Counter(
+        item["behavior"]
+        for item in wallet_classification_list
+    )
+
+    flow_paths = _build_flow_paths(
+        G,
+        address,
+    )
+
+    flow_path_strings = []
+
+    for path in flow_paths:
+        flow_path_strings.append(
+            " -> ".join(
+                _short_address(node)
+                for node in path
+            )
+        )
+
     return {
         "address": address,
+        "reported_address": address,
         "chain_id": chain_id,
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
+        "value_edges": stats["value_edges"],
+        "interaction_edges": stats["interaction_edges"],
         "transactions_analyzed": stats["transaction_count"],
         "wallets": wallets,
         "contracts": contracts,
@@ -991,6 +1608,9 @@ def investigation_summary(
         "assets_observed": sorted(assets_observed),
         "asset_totals": stats["asset_totals"],
         "total_value": stats["asset_totals"],
+        "wallet_classifications": wallet_classification_list,
+        "wallet_behavior_counts": dict(behavior_counts),
+        "flow_paths": flow_path_strings,
         "risk": risk or {},
         "cross_chain": cross_chain or {},
     }
